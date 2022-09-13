@@ -5,15 +5,15 @@ use std::cmp::Ordering;
 use std::path::Path;
 use std::vec::Vec;
 use crate::icstime::ICSTime;
-use chrono::prelude::*;
+// use chrono::prelude::*;
 
 #[derive(Debug)]
 pub struct Vevent {
     uid: u32,
-    start: ICSTime,
+    pub start: ICSTime,
     end: ICSTime,
     location: String,
-    summary: String,
+    pub summary: String,
 }
 
 impl Ord for Vevent {
@@ -36,17 +36,15 @@ impl PartialEq for Vevent {
 
 impl Eq for Vevent {}
 
-pub fn get_events_today(events: Vec<Vevent>) -> Vec<Vevent> {
-    let today: DateTime<Utc> = Utc::now();
-    let mut todays_events: Vec<Vevent> = events
-                                        .into_iter()
-                                        .filter( |ev| ev.start.is_on_day(
-                                                           today.year().try_into().unwrap(),
-                                                           today.month().try_into().unwrap(),
-                                                           today.day()) )
-                                        .collect::<Vec<Vevent>>();
+pub fn get_events_by_date(events: &Vec<Vevent>, date_tuple: (u32, u32, u32) ) -> Vec<&Vevent> {
+    
+    let mut todays_events: Vec<&Vevent> = events
+                                        .iter()
+                                        .filter( |ev| ev.start.is_on_day(date_tuple))
+                                        .collect::<Vec<&Vevent>>();
     todays_events.sort();
     todays_events
+
 }
 
 pub fn parse_events(filename: &str) -> Vec<Vevent>{
@@ -84,7 +82,7 @@ pub fn parse_events(filename: &str) -> Vec<Vevent>{
                     "DTSTART" => start = ICSTime::new(value.to_string()),
                     "DTEND" => end = ICSTime::new(value.to_string()),
                     "LOCATION" => location = value.to_string(),
-                    "SUMMARY"=> summary = value.to_string(),
+                    "SUMMARY"=> summary = (&value.to_string()[..value.len()-10]).to_string(),
                     "UID"=> uid = u32::from_str_radix(&value[6..11], 16).unwrap(),
                     "END" => { events.push(Vevent{
                                             uid: uid,
