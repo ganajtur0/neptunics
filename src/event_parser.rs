@@ -11,7 +11,7 @@ use crate::icstime::ICSTime;
 pub struct Vevent {
     uid: u32,
     pub start: ICSTime,
-    end: ICSTime,
+    pub end: ICSTime,
     location: String,
     pub summary: String,
 }

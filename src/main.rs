@@ -2,7 +2,7 @@ mod icstime;
 mod event_parser;
 
 use ncurses::*;
-use icstime::{day_to_dowstr, today_as_date_tuple};
+use icstime::{day_to_dowstr, today_as_date_tuple, TimeStamp, current_timestamp};
 use std::char;
 
 fn main() {
@@ -16,37 +16,67 @@ fn main() {
 
 
     let mut d = today_as_date_tuple();
-    let mut events_today = event_parser::get_events_by_date(&events, (d.0, d.1, d.2));
+    let mut events_today = event_parser::get_events_by_date(&events, d);
+
+    let timestamps: [TimeStamp; 6] = [
+        TimeStamp{h:7,m:45},
+        TimeStamp{h:9,m:30},
+        TimeStamp{h:11,m:15},
+        TimeStamp{h:13,m:15},
+        TimeStamp{h:15,m:0},
+        TimeStamp{h:16,m:45}
+    ];
 
     loop {
+        let cts = current_timestamp();
         attron(A_BOLD());
         addstr(day_to_dowstr(d));
-        addch('\n' as chtype);
-        addch('\n' as chtype);
         attroff(A_BOLD());
+        ncurses_ch('\n', 2);
 
-        for event in &events_today{
-            addstr(event.summary.as_str());
-            addch('\n' as chtype);
-            addch('\n' as chtype);
-            addch('\n' as chtype);
+
+        let mut e_index = 0;
+
+        for ts in timestamps {
+
+            addstr(ts.to_string().as_str());
+            ncurses_ch(' ',2);
+
+            if e_index < events_today.len(){
+                let event = &events_today[e_index];
+
+                if event.start == ts {
+                    if event.start <= cts && event.end >= cts {
+                        attron(A_STANDOUT());
+                    } 
+                    addstr(event.summary.as_str());
+                    e_index+=1;
+                    if event.start <= cts && event.end >= cts {
+                        attroff(A_STANDOUT());
+                    } 
+                }
+            }
+
+            ncurses_ch('\n', 3);
         }
+
         let ch = getch();
         let ch = char::from_u32(ch as u32).expect("Invalid character!");
+
         match ch {
             'l' => {
-                        d = next_day(d);
-                        events_today = event_parser::get_events_by_date(&events, d);
-                        ncurses_clean();
-                    },
+                d = next_day(d);
+                events_today = event_parser::get_events_by_date(&events, d);
+            },
             'h' => {
-                        d = prev_day(d);
-                        events_today = event_parser::get_events_by_date(&events, d);
-                        ncurses_clean();
-                    },
+                d = prev_day(d);
+                events_today = event_parser::get_events_by_date(&events, d);
+            },
             'q' => break,
             _   => (),
         };
+
+        ncurses_clean();
         refresh();
     }
 
@@ -54,19 +84,21 @@ fn main() {
 
 }
 
-fn next_day(d: (u32, u32, u32)) -> (u32, u32, u32){
-    if d.1 == 4 {
-        return d
+fn ncurses_ch(c: char, repeat: u8) {
+    for _i in 0..repeat {
+        addch(c as chtype);
     }
-    (d.0, d.1, d.2+1)
 }
 
-fn prev_day(d: (u32, u32, u32)) -> (u32, u32, u32){
-    if d.1 == 0 {
-        return d
-    }
-    (d.0, d.1, d.2-1)
-}
+// TODO: these should be a LOT more sophisticated   //
+fn next_day(d: (u32, u32, u32)) -> (u32, u32, u32){ //
+    (d.0, d.1, d.2+1)                               // 
+}                                                   //
+                                                    // 
+fn prev_day(d: (u32, u32, u32)) -> (u32, u32, u32){ //
+    (d.0, d.1, d.2-1)                               //
+}                                                   //
+// TODO                                             //
 
 fn ncurses_clean() {
     mv(2,0);

@@ -1,3 +1,4 @@
+use std::ops;
 use std::fmt;
 use std::cmp::Ordering;
 use chrono::prelude::*;
@@ -10,6 +11,12 @@ pub struct ICSTime {
     pub hour:  u32,
     pub min:   u32,
     pub dow:   u32
+}
+
+#[derive(Copy, Clone)]
+pub struct TimeStamp {
+    pub h: u32,
+    pub m: u32,
 }
 
 fn dow_to_str(n: u32) -> &'static str {
@@ -30,8 +37,42 @@ pub fn day_to_dowstr(n: (u32, u32, u32)) -> &'static str{
 }
 
 pub fn today_as_date_tuple() -> (u32, u32, u32) {
-    let today: DateTime<Utc> = Utc::now();
+    let today: DateTime<Local> = Local::now();
     (today.year().try_into().unwrap(), today.month().try_into().unwrap(), today.day())
+}
+
+pub fn current_timestamp() -> TimeStamp {
+    let today: DateTime<Local> = Local::now();
+    TimeStamp {h: today.hour(), m: today.minute()}
+}
+
+impl ops::Add<u32> for TimeStamp {
+    type Output = TimeStamp;
+    fn add(self, minute: u32) -> TimeStamp {
+        let min = self.m + minute;
+        if min >= 60 {
+            return TimeStamp {
+                      h: self.h + 1,
+                      m: min-60,
+                   }
+        }
+        TimeStamp {
+            h: self.h,
+            m: min
+        }
+    }
+}
+
+impl ops::AddAssign<u32> for TimeStamp {
+    fn add_assign(&mut self, min: u32) {
+        *self = *self+min;
+    }
+}
+
+impl fmt::Display for TimeStamp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:0>2}:{:0>2}", self.h, self.m)
+    }
 }
 
 impl ICSTime {
@@ -50,7 +91,7 @@ impl ICSTime {
             year: y,
             month: m,
             day: d,
-            hour: hr,
+            hour: hr+2,
             min: mi,
             dow: day_of_week,
         }
@@ -90,6 +131,23 @@ impl PartialOrd for ICSTime {
 impl PartialEq for ICSTime {
     fn eq(&self, other: &Self) -> bool{
         (self.year, self.month, self.day, self.hour, self.min) == (other.year, other.month, other.day, other.hour, other.min)
+    }
+}
+
+impl PartialOrd<TimeStamp> for ICSTime {
+    fn partial_cmp(&self, other: &TimeStamp) -> Option<Ordering> {
+        Some((self.hour, self.min).cmp(&(other.h, other.m)))
+    }
+    fn le(&self, other: &TimeStamp) -> bool {
+        self.hour + self.min*60 >= other.h+other.m*60
+    }
+    fn ge(&self, other: &TimeStamp) -> bool {
+        self.hour+self.min*60 <= other.h+other.m*60
+    }
+}
+impl PartialEq<TimeStamp> for ICSTime {
+    fn eq(&self, other: &TimeStamp) -> bool {
+        (self.hour, self.min) == (other.h, other.m)
     }
 }
 
