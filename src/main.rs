@@ -1,19 +1,38 @@
+// TODO:
+// - fix issue with comparing TimeStamp to ICSTime
+// - add config file
+
 mod icstime;
 mod event_parser;
 
 use ncurses::*;
-use icstime::{day_to_dowstr, today_as_date_tuple, TimeStamp, current_timestamp};
+use icstime::{
+    day_to_dowstr,
+    today_as_date_tuple,
+    TimeStamp,
+    current_timestamp,
+    next_day,
+    prev_day
+};
 use std::char;
+use clap::Parser;
+
+#[derive(Parser)]
+struct Cli {
+    path: std::path::PathBuf,
+}
 
 fn main() {
-    let events = event_parser::parse_events("/home/sanyi/Documents/orarend.ics");
+
+    let args = Cli::parse();
+
+    let events = event_parser::parse_events(&args.path);
 
     ncurses_init();
 
     attron(A_BOLD());
     addstr("Press Q to quit\n\n");
     attroff(A_BOLD());
-
 
     let mut d = today_as_date_tuple();
     let mut events_today = event_parser::get_events_by_date(&events, d);
@@ -39,7 +58,9 @@ fn main() {
 
         for ts in timestamps {
 
+            attron(A_UNDERLINE());
             addstr(ts.to_string().as_str());
+            attroff(A_UNDERLINE());
             ncurses_ch(' ',2);
 
             if e_index < events_today.len(){
@@ -50,14 +71,16 @@ fn main() {
                         attron(A_STANDOUT());
                     } 
                     addstr(event.summary.as_str());
+                    ncurses_ch('\n', 1);
+                    addstr(event.location.as_str());
                     e_index+=1;
                     if event.start <= cts && event.end >= cts {
                         attroff(A_STANDOUT());
                     } 
                 }
+            
             }
-
-            ncurses_ch('\n', 3);
+            ncurses_ch('\n', 2);
         }
 
         let ch = getch();
@@ -70,6 +93,10 @@ fn main() {
             },
             'h' => {
                 d = prev_day(d);
+                events_today = event_parser::get_events_by_date(&events, d);
+            },
+            ' ' => {
+                d = today_as_date_tuple();
                 events_today = event_parser::get_events_by_date(&events, d);
             },
             'q' => break,
@@ -89,16 +116,6 @@ fn ncurses_ch(c: char, repeat: u8) {
         addch(c as chtype);
     }
 }
-
-// TODO: these should be a LOT more sophisticated   //
-fn next_day(d: (u32, u32, u32)) -> (u32, u32, u32){ //
-    (d.0, d.1, d.2+1)                               // 
-}                                                   //
-                                                    // 
-fn prev_day(d: (u32, u32, u32)) -> (u32, u32, u32){ //
-    (d.0, d.1, d.2-1)                               //
-}                                                   //
-// TODO                                             //
 
 fn ncurses_clean() {
     mv(2,0);

@@ -2,7 +2,6 @@ use std::{fmt, u32};
 use std::fs::File;
 use std::io::{self, BufRead};
 use std::cmp::Ordering;
-use std::path::Path;
 use std::vec::Vec;
 use crate::icstime::ICSTime;
 // use chrono::prelude::*;
@@ -12,7 +11,7 @@ pub struct Vevent {
     uid: u32,
     pub start: ICSTime,
     pub end: ICSTime,
-    location: String,
+    pub location: String,
     pub summary: String,
 }
 
@@ -47,9 +46,7 @@ pub fn get_events_by_date(events: &Vec<Vevent>, date_tuple: (u32, u32, u32) ) ->
 
 }
 
-pub fn parse_events(filename: &str) -> Vec<Vevent>{
-
-    let path = Path::new(filename);
+pub fn parse_events(path: &std::path::PathBuf) -> Vec<Vevent>{
 
     let file = match File::open(path){
         Err(why) => panic!("Could not open {}: {}", path.display(), why),

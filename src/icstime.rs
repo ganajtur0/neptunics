@@ -2,6 +2,7 @@ use std::ops;
 use std::fmt;
 use std::cmp::Ordering;
 use chrono::prelude::*;
+use chrono::Duration;
 
 #[derive(Debug, Default, Copy, Clone)]
 pub struct ICSTime {
@@ -36,9 +37,21 @@ pub fn day_to_dowstr(n: (u32, u32, u32)) -> &'static str{
     dow_to_str(day_of_week(n))
 }
 
+pub fn chrono_as_date_tuple(d: Date<Local>) -> (u32, u32, u32) {
+    (d.year().try_into().unwrap(), d.month().try_into().unwrap(), d.day())
+} 
+
 pub fn today_as_date_tuple() -> (u32, u32, u32) {
-    let today: DateTime<Local> = Local::now();
-    (today.year().try_into().unwrap(), today.month().try_into().unwrap(), today.day())
+    let today: Date<Local> = Local::now().date();
+    chrono_as_date_tuple(today)
+}
+
+pub fn next_day(d: (u32, u32, u32)) -> (u32, u32, u32) {
+    chrono_as_date_tuple(Local.ymd(d.0 as i32, d.1, d.2) + Duration::days(1))
+}
+
+pub fn prev_day(d: (u32, u32, u32)) -> (u32, u32, u32) {
+    chrono_as_date_tuple(Local.ymd(d.0 as i32, d.1, d.2) - Duration::days(1))
 }
 
 pub fn current_timestamp() -> TimeStamp {
@@ -139,10 +152,10 @@ impl PartialOrd<TimeStamp> for ICSTime {
         Some((self.hour, self.min).cmp(&(other.h, other.m)))
     }
     fn le(&self, other: &TimeStamp) -> bool {
-        self.hour + self.min*60 >= other.h+other.m*60
+        self.hour + self.min*60 <= other.h+other.m*60
     }
     fn ge(&self, other: &TimeStamp) -> bool {
-        self.hour+self.min*60 <= other.h+other.m*60
+        self.hour+self.min*60 >= other.h+other.m*60
     }
 }
 impl PartialEq<TimeStamp> for ICSTime {
