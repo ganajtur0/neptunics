@@ -151,12 +151,14 @@ impl PartialOrd<TimeStamp> for ICSTime {
     fn partial_cmp(&self, other: &TimeStamp) -> Option<Ordering> {
         Some((self.hour, self.min).cmp(&(other.h, other.m)))
     }
+    /*
     fn le(&self, other: &TimeStamp) -> bool {
         self.hour + self.min*60 <= other.h+other.m*60
     }
     fn ge(&self, other: &TimeStamp) -> bool {
         self.hour+self.min*60 >= other.h+other.m*60
     }
+    */
 }
 impl PartialEq<TimeStamp> for ICSTime {
     fn eq(&self, other: &TimeStamp) -> bool {

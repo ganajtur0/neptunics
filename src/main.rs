@@ -1,5 +1,4 @@
 // TODO:
-// - fix issue with comparing TimeStamp to ICSTime
 // - add config file
 
 mod icstime;
@@ -67,14 +66,15 @@ fn main() {
                 let event = &events_today[e_index];
 
                 if event.start == ts {
-                    if event.start <= cts && event.end >= cts {
+                    let is_ongoing = event.start <= cts && event.end >= cts;
+                    if is_ongoing {
                         attron(A_STANDOUT());
                     } 
                     addstr(event.summary.as_str());
                     ncurses_ch('\n', 1);
                     addstr(event.location.as_str());
                     e_index+=1;
-                    if event.start <= cts && event.end >= cts {
+                    if is_ongoing {
                         attroff(A_STANDOUT());
                     } 
                 }
