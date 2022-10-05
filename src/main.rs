@@ -3,6 +3,7 @@
 
 mod icstime;
 mod event_parser;
+mod config_parser;
 
 use ncurses::*;
 use icstime::{
@@ -12,6 +13,9 @@ use icstime::{
     current_timestamp,
     next_day,
     prev_day
+};
+use config_parser::{
+    parse_config,
 };
 use std::char;
 use clap::Parser;
@@ -24,6 +28,8 @@ struct Cli {
 fn main() {
 
     let args = Cli::parse();
+
+    let conf = parse_config();
 
     let events = event_parser::parse_events(&args.path);
 
@@ -47,6 +53,8 @@ fn main() {
 
     loop {
         let cts = current_timestamp();
+        addstr(cts.to_string().as_str());
+        ncurses_ch('\n', 2);
         attron(A_BOLD());
         addstr(day_to_dowstr(d));
         attroff(A_BOLD());
