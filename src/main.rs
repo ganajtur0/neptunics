@@ -18,20 +18,45 @@ use config_parser::{
     parse_config,
 };
 use std::char;
-use clap::Parser;
+use clap::{
+    Parser,
+    CommandFactory
+};
 
 #[derive(Parser)]
 struct Cli {
-    path: std::path::PathBuf,
+    path: Option<std::path::PathBuf>,
 }
 
 fn main() {
 
     let args = Cli::parse();
+    let mut cmd = Cli::command();
 
-    let conf = parse_config();
+    let events;
+    if let Some(argpath) = args.path{
+        println!("Opening ics file as specified in cli argument");
+        events = event_parser::parse_events(&argpath);
+    }
+    else {
+        if let Ok(conf) = parse_config() {
+            if let Some(ics_path) = conf.ics_path {
+                println!("Opening ics file as specified in config file");
+                events = event_parser::parse_events(&std::path::PathBuf::from(ics_path));
+            }
+            else {
+                println!("Path to ics file not found in config file!");
+                let _ = cmd.print_help();
+                return ();
+            }
+        }
+        else{
+            println!("An error occured when parsing the config file :(");
+            let _ = cmd.print_help();
+            return ();
+        }
+    }
 
-    let events = event_parser::parse_events(&args.path);
 
     ncurses_init();
 

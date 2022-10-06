@@ -2,7 +2,7 @@ use std::env::var;
 use super::*;
 
 pub struct Conf {
-    ics_path: String,
+    pub ics_path: Option<String>,
 }
 
 pub fn parse_config() -> std::io::Result<Conf> {
@@ -14,7 +14,7 @@ pub fn parse_config() -> std::io::Result<Conf> {
     let mut buffer = String::new();
 
     let mut conf = Conf {
-        ics_path: "".to_string(),
+        ics_path: None,
     };
 
     while let Some(line) = reader.read_line(&mut buffer) {
@@ -24,7 +24,7 @@ pub fn parse_config() -> std::io::Result<Conf> {
         
         match key {
             "path" => {
-                conf.ics_path = val.to_string();
+                conf.ics_path = Some(val.to_string());
                 return Ok(conf);
             },
             _ => (),
