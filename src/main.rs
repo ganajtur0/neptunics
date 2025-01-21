@@ -1,167 +1,546 @@
-// TODO:
-// - add config file
-
-mod icstime;
-mod event_parser;
-mod config_parser;
-
-use ncurses::*;
-use icstime::{
-    day_to_dowstr,
-    today_as_date_tuple,
-    TimeStamp,
-    current_timestamp,
-    next_day,
-    prev_day
+use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, TimeDelta, Utc, Weekday};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::style::palette::tailwind;
+use ratatui::{
+    layout::{Constraint, Layout, Margin, Rect},
+    style::{Color, Modifier, Style, Stylize},
+    text::Text,
+    widgets::{
+        Block, BorderType, Cell, HighlightSpacing, Paragraph, Row, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, Table, TableState,
+    },
+    DefaultTerminal, Frame,
 };
-use config_parser::{
-    parse_config,
-};
-use std::char;
-use clap::{
-    Parser,
-    CommandFactory
-};
+use std::io::Result;
 
-#[derive(Parser)]
-struct Cli {
-    path: Option<std::path::PathBuf>,
+use icalendar::{
+    Calendar, CalendarComponent, Component, DatePerhapsTime,
+    DatePerhapsTime::DateTime as IcalDateTime, EventLike,
+};
+use std::cmp::Ordering;
+use std::collections::HashSet;
+use std::fmt;
+use std::fs::read_to_string;
+use std::hash::Hash;
+use std::hash::Hasher;
+
+use unicode_segmentation::UnicodeSegmentation;
+
+const FILENAME: &'static str = "NeptunCalendarExport.ics";
+const ITEM_HEIGHT: usize = 4;
+const INFO_TEXT: &str =
+    "(Esc) kilépés | (↑) lépés felfelé | (↓) lépés lefelé | (←) előző nap | (→) következő nap";
+
+pub struct App<'a> {
+    state: TableState,
+    classes: &'a Vec<NeptunClass<'a>>,
+    selected_classes: Vec<&'a NeptunClass<'a>>,
+    longest_items_lens: (u16, u16, u16, u16, u16), // name, code, duration, location, teachers
+    scroll_state: ScrollbarState,
+    colors: TableColors,
+    selected_date: NaiveDate,
 }
 
-fn main() {
-
-    let args = Cli::parse();
-    let mut cmd = Cli::command();
-
-    let events;
-    if let Some(argpath) = args.path{
-        println!("Opening ics file as specified in cli argument");
-        events = event_parser::parse_events(&argpath);
-    }
-    else {
-        if let Ok(conf) = parse_config() {
-            if let Some(ics_path) = conf.ics_path {
-                println!("Opening ics file as specified in config file");
-                events = event_parser::parse_events(&std::path::PathBuf::from(ics_path));
-            }
-            else {
-                println!("Path to ics file not found in config file!");
-                let _ = cmd.print_help();
-                return ();
-            }
-        }
-        else{
-            println!("An error occured when parsing the config file :(");
-            let _ = cmd.print_help();
-            return ();
+impl<'a> App<'a> {
+    fn new(classes: &'a Vec<NeptunClass<'a>>) -> Self {
+        // let today: NaiveDate = chrono::offset::Local::now().date_naive();
+        let today: NaiveDate = NaiveDate::from_ymd_opt(2024, 11, 20).unwrap();
+        let daily_classes = get_classes_by_day(&classes, today);
+        Self {
+            state: TableState::default().with_selected(0),
+            classes,
+            longest_items_lens: (25, 20, 13, 17, 25),
+            scroll_state: ScrollbarState::new(
+                daily_classes.len().checked_sub(1).unwrap_or(0) * ITEM_HEIGHT,
+            ),
+            selected_classes: daily_classes,
+            colors: TableColors::new(),
+            selected_date: today,
         }
     }
 
+    fn index_of_ongoing(&self) -> Option<usize> {
+        let time: NaiveTime = chrono::offset::Local::now().time();
+        for i in 0..self.selected_classes.len() {
+            if self.selected_classes[i].start.time() <= time
+                && self.selected_classes[i].end.time() >= time
+            {
+                return Some(i);
+            }
+        }
+        None
+    }
 
-    ncurses_init();
+    fn truncate_string(&self, str: &String, index: usize) -> String {
+        let len = match index {
+            0 => self.longest_items_lens.0,
+            1 => self.longest_items_lens.1,
+            2 => self.longest_items_lens.2,
+            3 => self.longest_items_lens.3,
+            4 => self.longest_items_lens.4,
+            _ => 0,
+        };
+        if str.graphemes(true).count() > len as usize {
+            let mut trunc_str: String = str.graphemes(true).take(len as usize).collect();
+            trunc_str.push_str("...");
+            trunc_str
+        } else {
+            str.to_string()
+        }
+    }
 
-    attron(A_BOLD());
-    addstr("Press Q to quit\n\n");
-    attroff(A_BOLD());
+    fn next_day(&mut self) {
+        self.selected_date += TimeDelta::days(1);
+        self.selected_classes = get_classes_by_day(&self.classes, self.selected_date);
+    }
 
-    let mut d = today_as_date_tuple();
-    let mut events_today = event_parser::get_events_by_date(&events, d);
+    fn prev_day(&mut self) {
+        self.selected_date -= TimeDelta::days(1);
+        self.selected_classes = get_classes_by_day(&self.classes, self.selected_date);
+    }
 
-    let timestamps: [TimeStamp; 6] = [
-        TimeStamp{h:7,m:45},
-        TimeStamp{h:9,m:30},
-        TimeStamp{h:11,m:15},
-        TimeStamp{h:13,m:15},
-        TimeStamp{h:15,m:0},
-        TimeStamp{h:16,m:45}
-    ];
-
-    loop {
-        let cts = current_timestamp();
-        addstr(cts.to_string().as_str());
-        ncurses_ch('\n', 2);
-        attron(A_BOLD());
-        addstr(day_to_dowstr(d));
-        attroff(A_BOLD());
-        ncurses_ch('\n', 2);
-
-
-        let mut e_index = 0;
-
-        for ts in timestamps {
-
-            attron(A_UNDERLINE());
-            addstr(ts.to_string().as_str());
-            attroff(A_UNDERLINE());
-            ncurses_ch(' ',2);
-
-            if e_index < events_today.len(){
-                let event = &events_today[e_index];
-
-                if event.start == ts {
-                    let is_ongoing = event.start <= cts && event.end >= cts;
-                    if is_ongoing {
-                        attron(A_STANDOUT());
-                    } 
-                    addstr(event.summary.as_str());
-                    ncurses_ch('\n', 1);
-                    addstr(event.location.as_str());
-                    e_index+=1;
-                    if is_ongoing {
-                        attroff(A_STANDOUT());
-                    } 
+    pub fn next_row(&mut self) {
+        let i = match self.state.selected() {
+            Some(i) => {
+                if i >= self.selected_classes.len() - 1 {
+                    0
+                } else {
+                    i + 1
                 }
-            
             }
-            ncurses_ch('\n', 2);
+            _ => 0,
+        };
+        self.state.select(Some(i));
+        self.scroll_state = self.scroll_state.position(i * ITEM_HEIGHT);
+    }
+
+    pub fn prev_row(&mut self) {
+        let i = match self.state.selected() {
+            Some(i) => {
+                if i == 0 {
+                    self.selected_classes.len() - 1
+                } else {
+                    i - 1
+                }
+            }
+            _ => 0,
+        };
+        self.state.select(Some(i));
+        self.scroll_state = self.scroll_state.position(i * ITEM_HEIGHT);
+    }
+    /*
+        pub fn next_column(&mut self) {
+            self.state.select_next_column();
         }
 
-        let ch = getch();
-        let ch = char::from_u32(ch as u32).expect("Invalid character!");
+        pub fn prev_column(&mut self) {
+            self.state.select_previous_column();
+        }
+    */
+    fn run(mut self, mut terminal: DefaultTerminal) -> Result<()> {
+        loop {
+            terminal.draw(|frame| self.draw(frame))?;
 
-        match ch {
-            'l' => {
-                d = next_day(d);
-                events_today = event_parser::get_events_by_date(&events, d);
-            },
-            'h' => {
-                d = prev_day(d);
-                events_today = event_parser::get_events_by_date(&events, d);
-            },
-            ' ' => {
-                d = today_as_date_tuple();
-                events_today = event_parser::get_events_by_date(&events, d);
-            },
-            'q' => break,
-            _   => (),
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    // let shift_pressed: bool = key.modifiers.contains(KeyModifiers::SHIFT);
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                        KeyCode::Char('j') | KeyCode::Down => self.next_row(),
+                        KeyCode::Char('k') | KeyCode::Up => self.prev_row(),
+                        // KeyCode::Char('h') | KeyCode::Left if shift_pressed => self.prev_day(),
+                        // KeyCode::Char('l') | KeyCode::Right if shift_pressed => self.next_day(),
+                        KeyCode::Char('h') | KeyCode::Left => self.prev_day(),
+                        KeyCode::Char('l') | KeyCode::Right => self.next_day(),
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    fn draw(&mut self, frame: &mut Frame) {
+        let vertical = &Layout::vertical([
+            Constraint::Length(4),
+            Constraint::Min(5),
+            Constraint::Length(4),
+            Constraint::Length(4),
+        ]);
+        let rects = vertical.split(frame.area());
+
+        self.render_date_bar(frame, rects[0]);
+        self.render_table(frame, rects[1]);
+        self.render_scrollbar(frame, rects[1]);
+        self.render_info_bar(frame, rects[2]);
+        self.render_footer(frame, rects[3]);
+    }
+
+    fn render_date_bar(&mut self, frame: &mut Frame, area: Rect) {
+        let info_footer = Paragraph::new(Text::from_iter([
+            self.selected_date.format("%Y-%m-%d").to_string(),
+            match self.selected_date.weekday() {
+                Weekday::Mon => "Hétfő",
+                Weekday::Tue => "Kedd",
+                Weekday::Wed => "Szerda",
+                Weekday::Thu => "Csütörtök",
+                Weekday::Fri => "Péntek",
+                Weekday::Sat => "Szombat",
+                Weekday::Sun => "Vasárnap",
+            }
+            .to_string(),
+        ]))
+        .style(
+            Style::new()
+                .fg(self.colors.row_fg)
+                .bg(self.colors.buffer_bg),
+        )
+        .centered()
+        .block(
+            Block::bordered()
+                .border_type(BorderType::Double)
+                .border_style(Style::new().fg(self.colors.footer_border_color)),
+        );
+        frame.render_widget(info_footer, area);
+    }
+
+    fn render_table(&mut self, frame: &mut Frame, area: Rect) {
+        let header_style = Style::default()
+            .fg(self.colors.header_fg)
+            .bg(self.colors.header_bg);
+        let selected_row_style = Style::default()
+            .add_modifier(Modifier::REVERSED)
+            .fg(self.colors.selected_row_style_fg);
+        /*
+        let selected_col_style = Style::default().fg(self.colors.selected_column_style_fg);
+        let selected_cell_style = Style::default()
+            .add_modifier(Modifier::REVERSED)
+            .fg(self.colors.selected_cell_style_fg);
+        */
+
+        let header = ["Név", "Kód", "Időpont", "Terem", "Tanárok"]
+            .into_iter()
+            .map(Cell::from)
+            .collect::<Row>()
+            .style(header_style)
+            .height(1);
+        let ongoing_idx = self.index_of_ongoing().unwrap_or(0);
+        let rows = self.selected_classes.iter().enumerate().map(|(i, data)| {
+            let color = if i == ongoing_idx {
+                self.colors.ongoing_class
+            } else {
+                match i % 2 {
+                    0 => self.colors.normal_row_color,
+                    _ => self.colors.alt_row_color,
+                }
+            };
+            let item = data.string_array();
+            item.into_iter()
+                .enumerate()
+                .map(|(i, content)| {
+                    Cell::from(Text::from(format!(
+                        "\n{}\n",
+                        self.truncate_string(&content, i)
+                    )))
+                })
+                .collect::<Row>()
+                .style(Style::new().fg(self.colors.row_fg).bg(color))
+                .height(4)
+        });
+        // let bar = " █ ";
+        let t = Table::new(
+            rows,
+            [
+                Constraint::Min(self.longest_items_lens.0 + 1),
+                Constraint::Length(self.longest_items_lens.1 + 1),
+                Constraint::Length(self.longest_items_lens.2 + 1),
+                Constraint::Length(self.longest_items_lens.3 + 1),
+                Constraint::Min(self.longest_items_lens.4),
+            ],
+        )
+        .header(header)
+        .row_highlight_style(selected_row_style)
+        // .column_highlight_style(selected_col_style)
+        // .cell_highlight_style(selected_cell_style)
+        .highlight_symbol(Text::from(vec!["".into(), "⮞".into(), "".into()]))
+        .bg(self.colors.buffer_bg)
+        .highlight_spacing(HighlightSpacing::Always);
+        frame.render_stateful_widget(t, area, &mut self.state);
+    }
+
+    fn render_scrollbar(&mut self, frame: &mut Frame, area: Rect) {
+        frame.render_stateful_widget(
+            Scrollbar::default()
+                .orientation(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None),
+            area.inner(Margin {
+                vertical: 1,
+                horizontal: 1,
+            }),
+            &mut self.scroll_state,
+        );
+    }
+
+    fn render_info_bar(&mut self, frame: &mut Frame, area: Rect) {
+        let info = match self.state.selected() {
+            Some(i) => {
+                let str_arr = self.selected_classes[i].string_array();
+                [str_arr[0].clone(), str_arr[4].clone()]
+            }
+            _ => ["".to_owned(), "".to_owned()],
         };
 
-        ncurses_clean();
-        refresh();
+        let info_bar = Paragraph::new(Text::from_iter(info))
+            .style(
+                Style::new()
+                    .fg(self.colors.row_fg)
+                    .bg(self.colors.buffer_bg),
+            )
+            .centered()
+            .block(
+                Block::bordered()
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::new().fg(self.colors.footer_border_color)),
+            );
+        frame.render_widget(info_bar, area);
     }
 
-    ncurses_die();
-
-}
-
-fn ncurses_ch(c: char, repeat: u8) {
-    for _i in 0..repeat {
-        addch(c as chtype);
+    fn render_footer(&mut self, frame: &mut Frame, area: Rect) {
+        let info_footer = Paragraph::new(Text::from(INFO_TEXT))
+            .style(
+                Style::new()
+                    .fg(self.colors.row_fg)
+                    .bg(self.colors.buffer_bg),
+            )
+            .centered()
+            .block(
+                Block::bordered()
+                    .border_type(BorderType::Double)
+                    .border_style(Style::new().fg(self.colors.footer_border_color)),
+            );
+        frame.render_widget(info_footer, area);
     }
 }
 
-fn ncurses_clean() {
-    mv(2,0);
-    wclrtobot(stdscr());
+struct TableColors {
+    buffer_bg: Color,
+    header_bg: Color,
+    header_fg: Color,
+    row_fg: Color,
+    selected_row_style_fg: Color,
+    // selected_column_style_fg: Color,
+    // selected_cell_style_fg: Color,
+    normal_row_color: Color,
+    alt_row_color: Color,
+    footer_border_color: Color,
+    ongoing_class: Color,
 }
 
-fn ncurses_init() {
-    initscr();
-    raw();
-    keypad(stdscr(), true);
-    noecho();
+impl TableColors {
+    fn new() -> Self {
+        Self {
+            buffer_bg: tailwind::SLATE.c950,
+            header_bg: tailwind::CYAN.c900,
+            header_fg: tailwind::SLATE.c200,
+            row_fg: tailwind::SLATE.c200,
+            selected_row_style_fg: tailwind::CYAN.c400,
+            // selected_column_style_fg: tailwind::CYAN.c400,
+            // selected_cell_style_fg: tailwind::CYAN.c600,
+            normal_row_color: tailwind::SLATE.c950,
+            alt_row_color: tailwind::SLATE.c900,
+            footer_border_color: tailwind::CYAN.c400,
+            ongoing_class: tailwind::SLATE.c600,
+        }
+    }
 }
 
-fn ncurses_die() {
-    endwin();
+#[derive(Clone)]
+struct NeptunClass<'a> {
+    name: &'a str,
+    code: &'a str,
+    teachers: Vec<&'a str>,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    location: &'a str,
+}
+
+impl<'a> Ord for NeptunClass<'a> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.start.cmp(&other.start)
+    }
+}
+
+impl<'a> PartialOrd for NeptunClass<'a> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'a> PartialEq for NeptunClass<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        self.code == other.code
+    }
+}
+
+impl<'a> Eq for NeptunClass<'a> {}
+
+impl<'a> Hash for NeptunClass<'a> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.code.to_string().hash(state);
+    }
+}
+
+impl<'a> NeptunClass<'a> {
+    fn new(
+        summary: &'a str,
+        perhaps_start: DatePerhapsTime,
+        perhaps_end: DatePerhapsTime,
+        location: &'a str,
+    ) -> Self {
+        let name_and_the_rest: Vec<&str> = summary.split(" ( - ").collect::<Vec<&str>>();
+        let name = name_and_the_rest[0];
+        let code_and_the_rest: Vec<&str> =
+            name_and_the_rest[1].split(") - ").collect::<Vec<&str>>();
+        let code = code_and_the_rest[0];
+        let teachers: Vec<&str> = code_and_the_rest[1]
+            .split(" - ")
+            .next()
+            .expect("Failed to parse NeptunClass")
+            .split(";")
+            .collect::<Vec<&str>>();
+        let start: DateTime<Utc> = match perhaps_start {
+            IcalDateTime(idt) => match idt.try_into_utc() {
+                Some(dt) => dt,
+                _ => DateTime::<Utc>::MIN_UTC,
+            },
+            _ => DateTime::<Utc>::MIN_UTC,
+        };
+        let end: DateTime<Utc> = match perhaps_end {
+            IcalDateTime(idt) => match idt.try_into_utc() {
+                Some(dt) => dt,
+                _ => DateTime::<Utc>::MIN_UTC,
+            },
+            _ => DateTime::<Utc>::MIN_UTC,
+        };
+        NeptunClass {
+            name,
+            code,
+            teachers,
+            start,
+            end,
+            location,
+        }
+    }
+
+    fn string_array(&self) -> [String; 5] {
+        [
+            self.name.to_owned(),
+            self.code.to_owned(),
+            format!(
+                "{} - {}",
+                self.start.time().format("%H:%M"),
+                self.end.time().format("%H:%M")
+            ),
+            self.location.to_owned(),
+            self.teachers.join(";"),
+        ]
+    }
+}
+
+impl<'a> fmt::Display for NeptunClass<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let string_array: [String; 5] = self.string_array();
+        let mut disp_str = (0..self.name.len()).map(|_| "=").collect::<String>();
+        disp_str.push('\n');
+        disp_str.push_str(string_array.join("\n").as_str());
+        disp_str.push('\n');
+        disp_str.push_str(&(0..self.name.len()).map(|_| "=").collect::<String>());
+        write!(f, "{}", disp_str)
+    }
+}
+
+fn parse_calendar(filename: &str) -> Option<Calendar> {
+    let file_contents_result = read_to_string(filename);
+    let file_contents = match file_contents_result {
+        Ok(string) => string,
+        Err(err) => {
+            println!("Could not read the file ({}): {}", filename, err);
+            return None;
+        }
+    };
+    let calendar_result = file_contents.parse();
+    match calendar_result {
+        Ok(cal) => Some(cal),
+        Err(err) => {
+            println!("Could not parse the file ({}): {}", filename, err);
+            return None;
+        }
+    }
+}
+
+/*
+fn get_individual_classes(cal: &Calendar) -> HashSet<NeptunClass> {
+    let mut class_set: HashSet<NeptunClass> = HashSet::new();
+
+    for component in &cal.components {
+        if let CalendarComponent::Event(event) = component {
+            let event_summary: &str = event.get_summary().unwrap();
+            if event_summary.contains("Tanóra") {
+                let start: DatePerhapsTime = event.get_start().unwrap();
+                let end: DatePerhapsTime = event.get_end().unwrap();
+                let location: &str = event.get_location().unwrap();
+                class_set.insert(NeptunClass::new(&event_summary, start, end, location));
+            }
+        }
+    }
+
+    class_set
+}
+*/
+
+fn get_classes(cal: &Calendar) -> Vec<NeptunClass> {
+    let mut class_vec: Vec<NeptunClass> = Vec::new();
+
+    for component in &cal.components {
+        if let CalendarComponent::Event(event) = component {
+            let event_summary: &str = event.get_summary().unwrap();
+            if event_summary.contains("Tanóra") {
+                let start: DatePerhapsTime = event.get_start().unwrap();
+                let end: DatePerhapsTime = event.get_end().unwrap();
+                let location: &str = event.get_location().unwrap();
+                class_vec.push(NeptunClass::new(&event_summary, start, end, location));
+            }
+        }
+    }
+
+    class_vec
+}
+
+fn get_classes_by_day<'a>(
+    classes: &'a Vec<NeptunClass<'a>>,
+    day: NaiveDate,
+) -> Vec<&'a NeptunClass<'a>> {
+    let mut daily_classes: Vec<&'a NeptunClass<'a>> = classes
+        .iter()
+        .filter(|x| x.start.date_naive() == day)
+        .collect::<Vec<&'a NeptunClass<'a>>>();
+
+    daily_classes.sort_unstable();
+    daily_classes
+}
+
+fn main() -> Result<()> {
+    let calendar_option = parse_calendar(FILENAME);
+
+    let calendar = match calendar_option {
+        Some(cal) => cal,
+        _ => return Ok(()),
+    };
+
+    let classes: Vec<NeptunClass> = get_classes(&calendar);
+
+    let terminal = ratatui::init();
+    let app_result = App::new(&classes).run(terminal);
+    ratatui::restore();
+    app_result
 }
