@@ -3,11 +3,12 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::style::palette::tailwind;
 use ratatui::{
     layout::{Constraint, Layout, Margin, Rect},
+    prelude::Direction,
     style::{Color, Modifier, Style, Stylize},
     text::Text,
     widgets::{
-        Block, BorderType, Cell, HighlightSpacing, Paragraph, Row, Scrollbar, ScrollbarOrientation,
-        ScrollbarState, Table, TableState,
+        Block, BorderType, Borders, Cell, HighlightSpacing, Paragraph, Row, Scrollbar,
+        ScrollbarOrientation, ScrollbarState, Table, TableState, Wrap,
     },
     DefaultTerminal, Frame,
 };
@@ -25,7 +26,8 @@ use std::hash::Hasher;
 
 use unicode_segmentation::UnicodeSegmentation;
 
-const FILENAME: &'static str = "NeptunCalendarExport.ics";
+// const FILENAME: &'static str = "NeptunCalendarExport.ics";
+const FILENAME: &'static str = "Karpatia_Ahol_Zug_az_a_4_folyo.mp3";
 const ITEM_HEIGHT: usize = 4;
 const INFO_TEXT: &str =
     "(Esc) kilépés | (↑) lépés felfelé | (↓) lépés lefelé | (←) előző nap | (→) következő nap";
@@ -70,7 +72,7 @@ impl<'a> App {
                 selected_classes: 0,
                 colors: TableColors::new(),
                 selected_date: today,
-                current_screen: CurrentScreen::FileNotFound,
+                current_screen: CurrentScreen::Main,
             }
         } else {
             Self {
@@ -81,7 +83,7 @@ impl<'a> App {
                 selected_classes: 0,
                 colors: TableColors::new(),
                 selected_date: today,
-                current_screen: CurrentScreen::Main,
+                current_screen: CurrentScreen::FileNotFound,
             }
         }
     }
@@ -188,19 +190,44 @@ impl<'a> App {
     }
 
     fn draw(&mut self, frame: &mut Frame) {
-        let vertical = &Layout::vertical([
-            Constraint::Length(4),
-            Constraint::Min(5),
-            Constraint::Length(4),
-            Constraint::Length(4),
-        ]);
-        let rects = vertical.split(frame.area());
+        match self.current_screen {
+            CurrentScreen::FileNotFound => self.render_file_not_found(frame),
+            CurrentScreen::Main => {
+                let vertical = &Layout::vertical([
+                    Constraint::Length(4),
+                    Constraint::Min(5),
+                    Constraint::Length(4),
+                    Constraint::Length(4),
+                ]);
+                let rects = vertical.split(frame.area());
+                self.render_date_bar(frame, rects[0]);
+                self.render_table(frame, rects[1]);
+                self.render_scrollbar(frame, rects[1]);
+                self.render_info_bar(frame, rects[2]);
+                self.render_footer(frame, rects[3]);
+            }
+            CurrentScreen::FileSelect => {}
+        }
+    }
 
-        self.render_date_bar(frame, rects[0]);
-        self.render_table(frame, rects[1]);
-        self.render_scrollbar(frame, rects[1]);
-        self.render_info_bar(frame, rects[2]);
-        self.render_footer(frame, rects[3]);
+    fn render_file_not_found(&self, frame: &mut Frame) {
+        let popup_block = Block::default()
+            .title("Igen/Nem")
+            .borders(Borders::NONE)
+            .style(Style::default().bg(Color::DarkGray));
+
+        let error_text = Text::from_iter([
+            "A megadott fájl nem található, vagy nem megfelelő formátumú.",
+            "Szeretnél megadni egy új elérési utat?",
+        ])
+        .style(Style::default().fg(Color::Red));
+
+        let error_paragraph = Paragraph::new(error_text)
+            .block(popup_block)
+            .wrap(Wrap { trim: false });
+
+        let area = centered_rect(60, 30, frame.area());
+        frame.render_widget(error_paragraph, area);
     }
 
     fn render_date_bar(&mut self, frame: &mut Frame, area: Rect) {
@@ -541,6 +568,26 @@ fn get_classes(cal: Calendar) -> Vec<NeptunClass> {
     }
 
     class_vec
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }
 
 fn main() -> Result<()> {
