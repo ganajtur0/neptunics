@@ -1,5 +1,5 @@
 use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, TimeDelta, Utc, Weekday};
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::style::palette::tailwind;
 use ratatui::{
     layout::{Constraint, Layout, Margin, Rect},
@@ -18,7 +18,6 @@ use icalendar::{
     DatePerhapsTime::DateTime as IcalDateTime, EventLike,
 };
 use std::cmp::Ordering;
-use std::collections::HashSet;
 use std::fmt;
 use std::fs::read_to_string;
 use std::hash::Hash;
@@ -30,41 +29,80 @@ const FILENAME: &'static str = "NeptunCalendarExport.ics";
 const ITEM_HEIGHT: usize = 4;
 const INFO_TEXT: &str =
     "(Esc) kilépés | (↑) lépés felfelé | (↓) lépés lefelé | (←) előző nap | (→) következő nap";
+const LONGEST_ITEMS_LENS: (u16, u16, u16, u16, u16) = (25, 20, 13, 17, 25);
 
-pub struct App<'a> {
+enum CurrentScreen {
+    FileSelect,
+    FileNotFound,
+    Main,
+}
+
+struct App {
     state: TableState,
-    classes: &'a Vec<NeptunClass<'a>>,
-    selected_classes: Vec<&'a NeptunClass<'a>>,
+    classes: Vec<NeptunClass>,
+    selected_classes: usize,
     longest_items_lens: (u16, u16, u16, u16, u16), // name, code, duration, location, teachers
     scroll_state: ScrollbarState,
     colors: TableColors,
     selected_date: NaiveDate,
+    current_screen: CurrentScreen,
 }
 
-impl<'a> App<'a> {
-    fn new(classes: &'a Vec<NeptunClass<'a>>) -> Self {
+impl<'a> App {
+    fn new(calendar: Option<Calendar>) -> Self {
+        let success: bool;
+        let classes: Vec<NeptunClass>;
+        if let Some(cal) = calendar {
+            classes = get_classes(cal);
+            success = true;
+        } else {
+            classes = Vec::new();
+            success = false;
+        }
         // let today: NaiveDate = chrono::offset::Local::now().date_naive();
         let today: NaiveDate = NaiveDate::from_ymd_opt(2024, 11, 20).unwrap();
-        let daily_classes = get_classes_by_day(&classes, today);
-        Self {
-            state: TableState::default().with_selected(0),
-            classes,
-            longest_items_lens: (25, 20, 13, 17, 25),
-            scroll_state: ScrollbarState::new(
-                daily_classes.len().checked_sub(1).unwrap_or(0) * ITEM_HEIGHT,
-            ),
-            selected_classes: daily_classes,
-            colors: TableColors::new(),
-            selected_date: today,
+        if success {
+            Self {
+                state: TableState::default().with_selected(0),
+                classes: classes.clone(),
+                longest_items_lens: LONGEST_ITEMS_LENS,
+                scroll_state: ScrollbarState::new(0),
+                selected_classes: 0,
+                colors: TableColors::new(),
+                selected_date: today,
+                current_screen: CurrentScreen::FileNotFound,
+            }
+        } else {
+            Self {
+                state: TableState::default().with_selected(0),
+                classes: classes.clone(),
+                longest_items_lens: (25, 20, 13, 17, 25),
+                scroll_state: ScrollbarState::new(0),
+                selected_classes: 0,
+                colors: TableColors::new(),
+                selected_date: today,
+                current_screen: CurrentScreen::Main,
+            }
         }
     }
 
-    fn index_of_ongoing(&self) -> Option<usize> {
+    fn get_classes_by_day(
+        classes: &'a Vec<NeptunClass>,
+        selected_date: &NaiveDate,
+    ) -> Vec<&'a NeptunClass> {
+        let mut daily_classes = classes
+            .iter()
+            .filter(|&x| x.start.date_naive() == *selected_date)
+            .collect::<Vec<&NeptunClass>>();
+
+        daily_classes.sort_unstable();
+        daily_classes
+    }
+
+    fn index_of_ongoing(&self, selected_classes: &Vec<&'a NeptunClass>) -> Option<usize> {
         let time: NaiveTime = chrono::offset::Local::now().time();
-        for i in 0..self.selected_classes.len() {
-            if self.selected_classes[i].start.time() <= time
-                && self.selected_classes[i].end.time() >= time
-            {
+        for i in 0..selected_classes.len() {
+            if selected_classes[i].start.time() <= time && selected_classes[i].end.time() >= time {
                 return Some(i);
             }
         }
@@ -91,18 +129,16 @@ impl<'a> App<'a> {
 
     fn next_day(&mut self) {
         self.selected_date += TimeDelta::days(1);
-        self.selected_classes = get_classes_by_day(&self.classes, self.selected_date);
     }
 
     fn prev_day(&mut self) {
         self.selected_date -= TimeDelta::days(1);
-        self.selected_classes = get_classes_by_day(&self.classes, self.selected_date);
     }
 
     pub fn next_row(&mut self) {
         let i = match self.state.selected() {
             Some(i) => {
-                if i >= self.selected_classes.len() - 1 {
+                if i >= self.selected_classes - 1 {
                     0
                 } else {
                     i + 1
@@ -118,7 +154,7 @@ impl<'a> App<'a> {
         let i = match self.state.selected() {
             Some(i) => {
                 if i == 0 {
-                    self.selected_classes.len() - 1
+                    self.selected_classes - 1
                 } else {
                     i - 1
                 }
@@ -128,15 +164,7 @@ impl<'a> App<'a> {
         self.state.select(Some(i));
         self.scroll_state = self.scroll_state.position(i * ITEM_HEIGHT);
     }
-    /*
-        pub fn next_column(&mut self) {
-            self.state.select_next_column();
-        }
 
-        pub fn prev_column(&mut self) {
-            self.state.select_previous_column();
-        }
-    */
     fn run(mut self, mut terminal: DefaultTerminal) -> Result<()> {
         loop {
             terminal.draw(|frame| self.draw(frame))?;
@@ -216,6 +244,8 @@ impl<'a> App<'a> {
             .add_modifier(Modifier::REVERSED)
             .fg(self.colors.selected_cell_style_fg);
         */
+        let selected_classes = App::get_classes_by_day(&self.classes, &self.selected_date);
+        self.selected_classes = selected_classes.len();
 
         let header = ["Név", "Kód", "Időpont", "Terem", "Tanárok"]
             .into_iter()
@@ -223,8 +253,8 @@ impl<'a> App<'a> {
             .collect::<Row>()
             .style(header_style)
             .height(1);
-        let ongoing_idx = self.index_of_ongoing().unwrap_or(0);
-        let rows = self.selected_classes.iter().enumerate().map(|(i, data)| {
+        let ongoing_idx = self.index_of_ongoing(&selected_classes).unwrap_or(0);
+        let rows = selected_classes.iter().enumerate().map(|(i, data)| {
             let color = if i == ongoing_idx {
                 self.colors.ongoing_class
             } else {
@@ -281,10 +311,11 @@ impl<'a> App<'a> {
         );
     }
 
-    fn render_info_bar(&mut self, frame: &mut Frame, area: Rect) {
+    fn render_info_bar(&self, frame: &mut Frame, area: Rect) {
+        let selected_classes = App::get_classes_by_day(&self.classes, &self.selected_date);
         let info = match self.state.selected() {
             Some(i) => {
-                let str_arr = self.selected_classes[i].string_array();
+                let str_arr = selected_classes[i].string_array();
                 [str_arr[0].clone(), str_arr[4].clone()]
             }
             _ => ["".to_owned(), "".to_owned()],
@@ -305,7 +336,7 @@ impl<'a> App<'a> {
         frame.render_widget(info_bar, area);
     }
 
-    fn render_footer(&mut self, frame: &mut Frame, area: Rect) {
+    fn render_footer(&self, frame: &mut Frame, area: Rect) {
         let info_footer = Paragraph::new(Text::from(INFO_TEXT))
             .style(
                 Style::new()
@@ -353,7 +384,7 @@ impl TableColors {
         }
     }
 }
-
+/*
 #[derive(Clone)]
 struct NeptunClass<'a> {
     name: &'a str,
@@ -363,51 +394,62 @@ struct NeptunClass<'a> {
     end: DateTime<Utc>,
     location: &'a str,
 }
+*/
+#[derive(Clone)]
+struct NeptunClass {
+    name: String,
+    code: String,
+    teachers: Vec<String>,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    location: String,
+}
 
-impl<'a> Ord for NeptunClass<'a> {
+impl Ord for NeptunClass {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.start.cmp(&other.start)
     }
 }
 
-impl<'a> PartialOrd for NeptunClass<'a> {
+impl PartialOrd for NeptunClass {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<'a> PartialEq for NeptunClass<'a> {
+impl PartialEq for NeptunClass {
     fn eq(&self, other: &Self) -> bool {
         self.code == other.code
     }
 }
 
-impl<'a> Eq for NeptunClass<'a> {}
+impl Eq for NeptunClass {}
 
-impl<'a> Hash for NeptunClass<'a> {
+impl Hash for NeptunClass {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.code.to_string().hash(state);
     }
 }
 
-impl<'a> NeptunClass<'a> {
+impl NeptunClass {
     fn new(
-        summary: &'a str,
+        summary: String,
         perhaps_start: DatePerhapsTime,
         perhaps_end: DatePerhapsTime,
-        location: &'a str,
+        location: String,
     ) -> Self {
         let name_and_the_rest: Vec<&str> = summary.split(" ( - ").collect::<Vec<&str>>();
         let name = name_and_the_rest[0];
         let code_and_the_rest: Vec<&str> =
             name_and_the_rest[1].split(") - ").collect::<Vec<&str>>();
         let code = code_and_the_rest[0];
-        let teachers: Vec<&str> = code_and_the_rest[1]
+        let teachers: Vec<String> = code_and_the_rest[1]
             .split(" - ")
             .next()
             .expect("Failed to parse NeptunClass")
             .split(";")
-            .collect::<Vec<&str>>();
+            .map(|s| s.to_owned())
+            .collect::<Vec<String>>();
         let start: DateTime<Utc> = match perhaps_start {
             IcalDateTime(idt) => match idt.try_into_utc() {
                 Some(dt) => dt,
@@ -423,8 +465,8 @@ impl<'a> NeptunClass<'a> {
             _ => DateTime::<Utc>::MIN_UTC,
         };
         NeptunClass {
-            name,
-            code,
+            name: name.to_string(),
+            code: code.to_string(),
             teachers,
             start,
             end,
@@ -447,7 +489,7 @@ impl<'a> NeptunClass<'a> {
     }
 }
 
-impl<'a> fmt::Display for NeptunClass<'a> {
+impl fmt::Display for NeptunClass {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let string_array: [String; 5] = self.string_array();
         let mut disp_str = (0..self.name.len()).map(|_| "=").collect::<String>();
@@ -478,27 +520,7 @@ fn parse_calendar(filename: &str) -> Option<Calendar> {
     }
 }
 
-/*
-fn get_individual_classes(cal: &Calendar) -> HashSet<NeptunClass> {
-    let mut class_set: HashSet<NeptunClass> = HashSet::new();
-
-    for component in &cal.components {
-        if let CalendarComponent::Event(event) = component {
-            let event_summary: &str = event.get_summary().unwrap();
-            if event_summary.contains("Tanóra") {
-                let start: DatePerhapsTime = event.get_start().unwrap();
-                let end: DatePerhapsTime = event.get_end().unwrap();
-                let location: &str = event.get_location().unwrap();
-                class_set.insert(NeptunClass::new(&event_summary, start, end, location));
-            }
-        }
-    }
-
-    class_set
-}
-*/
-
-fn get_classes(cal: &Calendar) -> Vec<NeptunClass> {
+fn get_classes(cal: Calendar) -> Vec<NeptunClass> {
     let mut class_vec: Vec<NeptunClass> = Vec::new();
 
     for component in &cal.components {
@@ -508,7 +530,12 @@ fn get_classes(cal: &Calendar) -> Vec<NeptunClass> {
                 let start: DatePerhapsTime = event.get_start().unwrap();
                 let end: DatePerhapsTime = event.get_end().unwrap();
                 let location: &str = event.get_location().unwrap();
-                class_vec.push(NeptunClass::new(&event_summary, start, end, location));
+                class_vec.push(NeptunClass::new(
+                    event_summary.to_string(),
+                    start,
+                    end,
+                    location.to_string(),
+                ));
             }
         }
     }
@@ -516,31 +543,9 @@ fn get_classes(cal: &Calendar) -> Vec<NeptunClass> {
     class_vec
 }
 
-fn get_classes_by_day<'a>(
-    classes: &'a Vec<NeptunClass<'a>>,
-    day: NaiveDate,
-) -> Vec<&'a NeptunClass<'a>> {
-    let mut daily_classes: Vec<&'a NeptunClass<'a>> = classes
-        .iter()
-        .filter(|x| x.start.date_naive() == day)
-        .collect::<Vec<&'a NeptunClass<'a>>>();
-
-    daily_classes.sort_unstable();
-    daily_classes
-}
-
 fn main() -> Result<()> {
-    let calendar_option = parse_calendar(FILENAME);
-
-    let calendar = match calendar_option {
-        Some(cal) => cal,
-        _ => return Ok(()),
-    };
-
-    let classes: Vec<NeptunClass> = get_classes(&calendar);
-
     let terminal = ratatui::init();
-    let app_result = App::new(&classes).run(terminal);
+    let app_result = App::new(parse_calendar(FILENAME)).run(terminal);
     ratatui::restore();
     app_result
 }
