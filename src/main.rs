@@ -7,8 +7,8 @@ use ratatui::{
     style::{Color, Modifier, Style, Stylize},
     text::Text,
     widgets::{
-        Block, BorderType, Borders, Cell, HighlightSpacing, Paragraph, Row, Scrollbar,
-        ScrollbarOrientation, ScrollbarState, Table, TableState, Wrap,
+        Block, BorderType, Cell, HighlightSpacing, Paragraph, Row, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, Table, TableState,
     },
     DefaultTerminal, Frame,
 };
@@ -26,11 +26,18 @@ use std::hash::Hasher;
 
 use unicode_segmentation::UnicodeSegmentation;
 
-// const FILENAME: &'static str = "NeptunCalendarExport.ics";
-const FILENAME: &'static str = "Karpatia_Ahol_Zug_az_a_4_folyo.mp3";
+use ratatui_explorer::FileExplorer;
+
+const FILENAME: &'static str = "NeptunCalendarExport.ics";
+// const FILENAME: &'static str = "Karpatia_Ahol_Zug_az_a_4_folyo.mp3";
 const ITEM_HEIGHT: usize = 4;
-const INFO_TEXT: &str =
+const MAIN_INFO_TEXT: &str =
     "(Esc) kilépés | (↑) lépés felfelé | (↓) lépés lefelé | (←) előző nap | (→) következő nap";
+const FILE_NOT_FOUND_INFO_TEXT: &str = "(Esc) kilépés | (Enter) Új fájl kiválasztása";
+const FILE_SELECT_INFO_TEXT: [&str; 2] = [
+    "(Esc) kilépés | (↑) lépés felfelé | (↓) lépés lefelé ",
+    "(Enter) könyvtár: belépés | (Enter) fájl: kiválasztás",
+];
 const LONGEST_ITEMS_LENS: (u16, u16, u16, u16, u16) = (25, 20, 13, 17, 25);
 
 enum CurrentScreen {
@@ -48,6 +55,7 @@ struct App {
     colors: TableColors,
     selected_date: NaiveDate,
     current_screen: CurrentScreen,
+    file_explorer: FileExplorer,
 }
 
 impl<'a> App {
@@ -63,6 +71,7 @@ impl<'a> App {
         }
         // let today: NaiveDate = chrono::offset::Local::now().date_naive();
         let today: NaiveDate = NaiveDate::from_ymd_opt(2024, 11, 20).unwrap();
+        let file_explorer_theme = ratatui_explorer::Theme::default().add_default_title();
         if success {
             Self {
                 state: TableState::default().with_selected(0),
@@ -73,6 +82,7 @@ impl<'a> App {
                 colors: TableColors::new(),
                 selected_date: today,
                 current_screen: CurrentScreen::Main,
+                file_explorer: FileExplorer::with_theme(file_explorer_theme).unwrap(),
             }
         } else {
             Self {
@@ -83,7 +93,8 @@ impl<'a> App {
                 selected_classes: 0,
                 colors: TableColors::new(),
                 selected_date: today,
-                current_screen: CurrentScreen::FileNotFound,
+                current_screen: CurrentScreen::FileSelect,
+                file_explorer: FileExplorer::with_theme(file_explorer_theme).unwrap(),
             }
         }
     }
@@ -167,22 +178,57 @@ impl<'a> App {
         self.scroll_state = self.scroll_state.position(i * ITEM_HEIGHT);
     }
 
+    fn try_to_parse_calendar(&mut self) {
+        let path = self
+            .file_explorer
+            .current()
+            .path()
+            .as_path()
+            .display()
+            .to_string();
+        let cal_opt = parse_calendar(path.as_str());
+        match cal_opt {
+            Some(cal) => {
+                self.classes = get_classes(cal);
+                self.current_screen = CurrentScreen::Main;
+            }
+            _ => self.current_screen = CurrentScreen::FileNotFound,
+        }
+    }
+
     fn run(mut self, mut terminal: DefaultTerminal) -> Result<()> {
         loop {
             terminal.draw(|frame| self.draw(frame))?;
 
-            if let Event::Key(key) = event::read()? {
+            let event = event::read()?;
+            if let Event::Key(key) = event {
                 if key.kind == KeyEventKind::Press {
-                    // let shift_pressed: bool = key.modifiers.contains(KeyModifiers::SHIFT);
-                    match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                        KeyCode::Char('j') | KeyCode::Down => self.next_row(),
-                        KeyCode::Char('k') | KeyCode::Up => self.prev_row(),
-                        // KeyCode::Char('h') | KeyCode::Left if shift_pressed => self.prev_day(),
-                        // KeyCode::Char('l') | KeyCode::Right if shift_pressed => self.next_day(),
-                        KeyCode::Char('h') | KeyCode::Left => self.prev_day(),
-                        KeyCode::Char('l') | KeyCode::Right => self.next_day(),
-                        _ => {}
+                    match self.current_screen {
+                        // let shift_pressed: bool = key.modifiers.contains(KeyModifiers::SHIFT);
+                        CurrentScreen::Main => match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                            KeyCode::Char('j') | KeyCode::Down => self.next_row(),
+                            KeyCode::Char('k') | KeyCode::Up => self.prev_row(),
+                            KeyCode::Char('h') | KeyCode::Left => self.prev_day(),
+                            KeyCode::Char('l') | KeyCode::Right => self.next_day(),
+                            _ => {}
+                        },
+                        CurrentScreen::FileSelect => match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                            KeyCode::Enter => {
+                                if self.file_explorer.current().is_dir() {
+                                    self.file_explorer.handle(&event)?;
+                                } else {
+                                    self.try_to_parse_calendar();
+                                }
+                            }
+                            _ => self.file_explorer.handle(&event)?,
+                        },
+                        CurrentScreen::FileNotFound => match key.code {
+                            KeyCode::Enter => self.current_screen = CurrentScreen::FileSelect,
+                            KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                            _ => {}
+                        },
                     }
                 }
             }
@@ -191,7 +237,12 @@ impl<'a> App {
 
     fn draw(&mut self, frame: &mut Frame) {
         match self.current_screen {
-            CurrentScreen::FileNotFound => self.render_file_not_found(frame),
+            CurrentScreen::FileNotFound => {
+                let vertical = &Layout::vertical([Constraint::Min(5), Constraint::Length(4)]);
+                let rects = vertical.split(frame.area());
+                self.render_file_not_found(frame, rects[0]);
+                self.render_footer(frame, rects[1]);
+            }
             CurrentScreen::Main => {
                 let vertical = &Layout::vertical([
                     Constraint::Length(4),
@@ -206,28 +257,32 @@ impl<'a> App {
                 self.render_info_bar(frame, rects[2]);
                 self.render_footer(frame, rects[3]);
             }
-            CurrentScreen::FileSelect => {}
+            CurrentScreen::FileSelect => {
+                let widget = self.file_explorer.widget();
+                let vertical = &Layout::vertical([Constraint::Min(5), Constraint::Length(4)]);
+                let rects = vertical.split(frame.area());
+                frame.render_widget(&widget, rects[0]);
+                self.render_footer(frame, rects[1]);
+            }
         }
     }
 
-    fn render_file_not_found(&self, frame: &mut Frame) {
-        let popup_block = Block::default()
-            .title("Igen/Nem")
-            .borders(Borders::NONE)
-            .style(Style::default().bg(Color::DarkGray));
-
-        let error_text = Text::from_iter([
+    fn render_file_not_found(&self, frame: &mut Frame, area: Rect) {
+        let sub_area = centered_rect(50, 15, area);
+        let error_box = Paragraph::new(Text::from_iter([
             "A megadott fájl nem található, vagy nem megfelelő formátumú.",
             "Szeretnél megadni egy új elérési utat?",
-        ])
-        .style(Style::default().fg(Color::Red));
-
-        let error_paragraph = Paragraph::new(error_text)
-            .block(popup_block)
-            .wrap(Wrap { trim: false });
-
-        let area = centered_rect(60, 30, frame.area());
-        frame.render_widget(error_paragraph, area);
+        ]))
+        .style(Style::new().fg(Color::Red))
+        .centered()
+        .block(
+            Block::bordered()
+                .title("HIBA")
+                .border_type(BorderType::Double)
+                .border_style(Style::new().fg(Color::Red))
+                .style(Style::new().bg(self.colors.buffer_bg)),
+        );
+        frame.render_widget(error_box, sub_area);
     }
 
     fn render_date_bar(&mut self, frame: &mut Frame, area: Rect) {
@@ -265,12 +320,6 @@ impl<'a> App {
         let selected_row_style = Style::default()
             .add_modifier(Modifier::REVERSED)
             .fg(self.colors.selected_row_style_fg);
-        /*
-        let selected_col_style = Style::default().fg(self.colors.selected_column_style_fg);
-        let selected_cell_style = Style::default()
-            .add_modifier(Modifier::REVERSED)
-            .fg(self.colors.selected_cell_style_fg);
-        */
         let selected_classes = App::get_classes_by_day(&self.classes, &self.selected_date);
         self.selected_classes = selected_classes.len();
 
@@ -364,7 +413,12 @@ impl<'a> App {
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
-        let info_footer = Paragraph::new(Text::from(INFO_TEXT))
+        let text = match self.current_screen {
+            CurrentScreen::Main => Text::from(MAIN_INFO_TEXT),
+            CurrentScreen::FileNotFound => Text::from(FILE_NOT_FOUND_INFO_TEXT),
+            CurrentScreen::FileSelect => Text::from_iter(FILE_SELECT_INFO_TEXT),
+        };
+        let info_footer = Paragraph::new(text)
             .style(
                 Style::new()
                     .fg(self.colors.row_fg)
@@ -374,7 +428,11 @@ impl<'a> App {
             .block(
                 Block::bordered()
                     .border_type(BorderType::Double)
-                    .border_style(Style::new().fg(self.colors.footer_border_color)),
+                    .border_style(Style::new().fg(match self.current_screen {
+                        CurrentScreen::Main => self.colors.footer_border_color,
+                        CurrentScreen::FileSelect => Color::White,
+                        CurrentScreen::FileNotFound => Color::Red,
+                    })),
             );
         frame.render_widget(info_footer, area);
     }
@@ -532,16 +590,16 @@ fn parse_calendar(filename: &str) -> Option<Calendar> {
     let file_contents_result = read_to_string(filename);
     let file_contents = match file_contents_result {
         Ok(string) => string,
-        Err(err) => {
-            println!("Could not read the file ({}): {}", filename, err);
+        Err(_err) => {
+            // println!("Could not read the file ({}): {}", filename, err);
             return None;
         }
     };
     let calendar_result = file_contents.parse();
     match calendar_result {
         Ok(cal) => Some(cal),
-        Err(err) => {
-            println!("Could not parse the file ({}): {}", filename, err);
+        Err(_err) => {
+            // println!("Could not parse the file ({}): {}", filename, err);
             return None;
         }
     }
