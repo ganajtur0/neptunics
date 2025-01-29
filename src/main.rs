@@ -1,4 +1,7 @@
-use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, TimeDelta, Utc, Weekday};
+mod neptunclass;
+mod timetable;
+
+use chrono::{Datelike, NaiveDate, NaiveTime, TimeDelta, Weekday};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::style::palette::tailwind;
 use ratatui::{
@@ -14,19 +17,14 @@ use ratatui::{
 };
 use std::io::Result;
 
-use icalendar::{
-    Calendar, CalendarComponent, Component, DatePerhapsTime,
-    DatePerhapsTime::DateTime as IcalDateTime, EventLike,
-};
-use std::cmp::Ordering;
-use std::fmt;
+use icalendar::{Calendar, CalendarComponent, Component, DatePerhapsTime, EventLike};
 use std::fs::read_to_string;
-use std::hash::Hash;
-use std::hash::Hasher;
 
 use unicode_segmentation::UnicodeSegmentation;
 
 use ratatui_explorer::FileExplorer;
+
+use neptunclass::NeptunClass;
 
 const FILENAME: &'static str = "NeptunCalendarExport.ics";
 // const FILENAME: &'static str = "Karpatia_Ahol_Zug_az_a_4_folyo.mp3";
@@ -69,8 +67,8 @@ impl<'a> App {
             classes = Vec::new();
             success = false;
         }
-        // let today: NaiveDate = chrono::offset::Local::now().date_naive();
-        let today: NaiveDate = NaiveDate::from_ymd_opt(2024, 11, 20).unwrap();
+        let today: NaiveDate = chrono::offset::Local::now().date_naive();
+        // let today: NaiveDate = NaiveDate::from_ymd_opt(2024, 11, 20).unwrap();
         let file_explorer_theme = ratatui_explorer::Theme::default().add_default_title();
         if success {
             Self {
@@ -365,8 +363,6 @@ impl<'a> App {
         )
         .header(header)
         .row_highlight_style(selected_row_style)
-        // .column_highlight_style(selected_col_style)
-        // .cell_highlight_style(selected_cell_style)
         .highlight_symbol(Text::from(vec!["".into(), "⮞".into(), "".into()]))
         .bg(self.colors.buffer_bg)
         .highlight_spacing(HighlightSpacing::Always);
@@ -444,8 +440,6 @@ struct TableColors {
     header_fg: Color,
     row_fg: Color,
     selected_row_style_fg: Color,
-    // selected_column_style_fg: Color,
-    // selected_cell_style_fg: Color,
     normal_row_color: Color,
     alt_row_color: Color,
     footer_border_color: Color,
@@ -469,129 +463,12 @@ impl TableColors {
         }
     }
 }
-/*
-#[derive(Clone)]
-struct NeptunClass<'a> {
-    name: &'a str,
-    code: &'a str,
-    teachers: Vec<&'a str>,
-    start: DateTime<Utc>,
-    end: DateTime<Utc>,
-    location: &'a str,
-}
-*/
-#[derive(Clone)]
-struct NeptunClass {
-    name: String,
-    code: String,
-    teachers: Vec<String>,
-    start: DateTime<Utc>,
-    end: DateTime<Utc>,
-    location: String,
-}
-
-impl Ord for NeptunClass {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.start.cmp(&other.start)
-    }
-}
-
-impl PartialOrd for NeptunClass {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl PartialEq for NeptunClass {
-    fn eq(&self, other: &Self) -> bool {
-        self.code == other.code
-    }
-}
-
-impl Eq for NeptunClass {}
-
-impl Hash for NeptunClass {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.code.to_string().hash(state);
-    }
-}
-
-impl NeptunClass {
-    fn new(
-        summary: String,
-        perhaps_start: DatePerhapsTime,
-        perhaps_end: DatePerhapsTime,
-        location: String,
-    ) -> Self {
-        let name_and_the_rest: Vec<&str> = summary.split(" ( - ").collect::<Vec<&str>>();
-        let name = name_and_the_rest[0];
-        let code_and_the_rest: Vec<&str> =
-            name_and_the_rest[1].split(") - ").collect::<Vec<&str>>();
-        let code = code_and_the_rest[0];
-        let teachers: Vec<String> = code_and_the_rest[1]
-            .split(" - ")
-            .next()
-            .expect("Failed to parse NeptunClass")
-            .split(";")
-            .map(|s| s.to_owned())
-            .collect::<Vec<String>>();
-        let start: DateTime<Utc> = match perhaps_start {
-            IcalDateTime(idt) => match idt.try_into_utc() {
-                Some(dt) => dt,
-                _ => DateTime::<Utc>::MIN_UTC,
-            },
-            _ => DateTime::<Utc>::MIN_UTC,
-        };
-        let end: DateTime<Utc> = match perhaps_end {
-            IcalDateTime(idt) => match idt.try_into_utc() {
-                Some(dt) => dt,
-                _ => DateTime::<Utc>::MIN_UTC,
-            },
-            _ => DateTime::<Utc>::MIN_UTC,
-        };
-        NeptunClass {
-            name: name.to_string(),
-            code: code.to_string(),
-            teachers,
-            start,
-            end,
-            location,
-        }
-    }
-
-    fn string_array(&self) -> [String; 5] {
-        [
-            self.name.to_owned(),
-            self.code.to_owned(),
-            format!(
-                "{} - {}",
-                self.start.time().format("%H:%M"),
-                self.end.time().format("%H:%M")
-            ),
-            self.location.to_owned(),
-            self.teachers.join(";"),
-        ]
-    }
-}
-
-impl fmt::Display for NeptunClass {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let string_array: [String; 5] = self.string_array();
-        let mut disp_str = (0..self.name.len()).map(|_| "=").collect::<String>();
-        disp_str.push('\n');
-        disp_str.push_str(string_array.join("\n").as_str());
-        disp_str.push('\n');
-        disp_str.push_str(&(0..self.name.len()).map(|_| "=").collect::<String>());
-        write!(f, "{}", disp_str)
-    }
-}
 
 fn parse_calendar(filename: &str) -> Option<Calendar> {
     let file_contents_result = read_to_string(filename);
     let file_contents = match file_contents_result {
         Ok(string) => string,
         Err(_err) => {
-            // println!("Could not read the file ({}): {}", filename, err);
             return None;
         }
     };
@@ -599,7 +476,6 @@ fn parse_calendar(filename: &str) -> Option<Calendar> {
     match calendar_result {
         Ok(cal) => Some(cal),
         Err(_err) => {
-            // println!("Could not parse the file ({}): {}", filename, err);
             return None;
         }
     }
