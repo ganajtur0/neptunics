@@ -7,7 +7,7 @@ use std::hash::{Hash, Hasher};
 
 #[derive(Clone)]
 pub struct NeptunClass {
-    name: String,
+    pub name: String,
     code: String,
     teachers: Vec<String>,
     pub start: DateTime<Utc>,

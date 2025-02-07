@@ -2,13 +2,18 @@
 #![allow(unused_imports)]
 
 use crate::NeptunClass;
-use chrono::Datelike;
+use chrono::{Datelike, NaiveTime, TimeDelta, Timelike};
 use ratatui::prelude::{Buffer, Frame, Rect};
 use ratatui::style::{Color, Style};
+use ratatui::symbols;
 use ratatui::widgets::{
-    canvas::{Canvas, Rectangle},
+    canvas::{Canvas, Line, Rectangle},
     StatefulWidget, StatefulWidgetRef, Widget, WidgetRef,
 };
+use unicode_segmentation::UnicodeSegmentation;
+
+const HOUR_SEVEN_AS_QUARTERS: u8 = 28;
+const HOUR_TWENTY_AS_QUARTERS: u8 = 80;
 
 pub struct TimeTableState {
     pub(crate) offset: usize,
@@ -68,6 +73,22 @@ impl<'a> TimeTable<'a> {
         self.highlight_style = style.into();
         self
     }
+
+    fn quarters_from_seven(class: &NeptunClass) -> u8 {
+        let quarters_from_midnight = (class.start.hour() * 60 + class.start.minute()) / 15;
+        quarters_from_midnight as u8 - HOUR_SEVEN_AS_QUARTERS
+    }
+
+    fn quarters_from_twenty(class: &NeptunClass) -> u8 {
+        let quarters_from_midnight = (class.end.hour() * 60 + class.end.minute()) / 15;
+        HOUR_TWENTY_AS_QUARTERS - quarters_from_midnight as u8
+    }
+
+    fn height_in_quarters(class: &NeptunClass) -> u8 {
+        let start_as_quarters = (class.start.hour() * 60 + class.start.minute()) / 15;
+        let end_as_quarters = (class.end.hour() * 60 + class.end.minute()) / 15;
+        (end_as_quarters - start_as_quarters) as u8
+    }
 }
 
 impl Widget for TimeTable<'_> {
@@ -102,16 +123,38 @@ impl StatefulWidgetRef for TimeTable<'_> {
 
     fn render_ref(&self, area: Rect, buf: &mut Buffer, _state: &mut Self::State) {
         let canvas = Canvas::default()
-            .x_bounds([-45.0, 45.0])
-            .y_bounds([-100.0, 100.0])
+            .marker(symbols::Marker::HalfBlock)
+            .x_bounds([0.0, 70.0])
+            .y_bounds([0.0, 52.0])
             .paint(|ctx| {
-                ctx.draw(&Rectangle {
-                    x: 10.0,
-                    y: 10.0,
-                    width: 10.0,
-                    height: 20.0,
-                    color: Color::Cyan,
-                })
+                let mut x_coord = 5.0;
+                for day in &self.classes {
+                    for class in day {
+                        let y_coord = f64::from(TimeTable::quarters_from_twenty(&class));
+                        let height = f64::from(TimeTable::height_in_quarters(&class));
+                        ctx.draw(&Rectangle {
+                            x: x_coord,
+                            y: y_coord,
+                            height,
+                            width: 7.0,
+                            color: Color::Cyan,
+                        });
+                        ctx.print(
+                            x_coord + 1.0,
+                            y_coord + height - 2.0,
+                            class.name.graphemes(true).take(10).collect::<String>(),
+                        );
+                    }
+                    x_coord = x_coord + 10.0;
+                }
+                let mut time_iter = NaiveTime::from_hms_opt(21, 0, 0).unwrap();
+                let quarter_delta = TimeDelta::minutes(15);
+                for i in 0..=52 {
+                    if time_iter.minute() == 0 {
+                        ctx.print(0.0, i as f64, time_iter.format("%H:%M").to_string());
+                    }
+                    time_iter = time_iter - quarter_delta;
+                }
             });
         canvas.render(area, buf);
     }

@@ -16,6 +16,7 @@ use ratatui::{
     DefaultTerminal, Frame,
 };
 use std::io::Result;
+use timetable::TimeTable;
 
 use icalendar::{Calendar, CalendarComponent, Component, DatePerhapsTime, EventLike};
 use std::fs::read_to_string;
@@ -41,7 +42,8 @@ const LONGEST_ITEMS_LENS: (u16, u16, u16, u16, u16) = (25, 20, 13, 17, 25);
 enum CurrentScreen {
     FileSelect,
     FileNotFound,
-    Main,
+    DailyView,
+    TimeTableView,
 }
 
 struct App {
@@ -79,7 +81,7 @@ impl<'a> App {
                 selected_classes: 0,
                 colors: TableColors::new(),
                 selected_date: today,
-                current_screen: CurrentScreen::Main,
+                current_screen: CurrentScreen::TimeTableView,
                 file_explorer: FileExplorer::with_theme(file_explorer_theme).unwrap(),
             }
         } else {
@@ -108,6 +110,23 @@ impl<'a> App {
 
         daily_classes.sort_unstable();
         daily_classes
+    }
+
+    fn get_classes_by_week(
+        classes: &'a Vec<NeptunClass>,
+        selected_date: &NaiveDate,
+    ) -> Vec<&'a NeptunClass> {
+        let week_of_year = selected_date.iso_week().week();
+        let mon = NaiveDate::from_isoywd_opt(selected_date.year(), week_of_year, Weekday::Mon)
+            .unwrap_or(NaiveDate::MIN);
+        let sun = NaiveDate::from_isoywd_opt(selected_date.year(), week_of_year, Weekday::Sun)
+            .unwrap_or(NaiveDate::MAX);
+        let mut weekly_classes = classes
+            .iter()
+            .filter(|&x| x.start.date_naive() >= mon && x.start.date_naive() <= sun)
+            .collect::<Vec<&NeptunClass>>();
+        weekly_classes.sort_unstable();
+        weekly_classes
     }
 
     fn index_of_ongoing(&self, selected_classes: &Vec<&'a NeptunClass>) -> Option<usize> {
@@ -188,7 +207,7 @@ impl<'a> App {
         match cal_opt {
             Some(cal) => {
                 self.classes = get_classes(cal);
-                self.current_screen = CurrentScreen::Main;
+                self.current_screen = CurrentScreen::TimeTableView;
             }
             _ => self.current_screen = CurrentScreen::FileNotFound,
         }
@@ -203,12 +222,16 @@ impl<'a> App {
                 if key.kind == KeyEventKind::Press {
                     match self.current_screen {
                         // let shift_pressed: bool = key.modifiers.contains(KeyModifiers::SHIFT);
-                        CurrentScreen::Main => match key.code {
+                        CurrentScreen::DailyView => match key.code {
                             KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                             KeyCode::Char('j') | KeyCode::Down => self.next_row(),
                             KeyCode::Char('k') | KeyCode::Up => self.prev_row(),
                             KeyCode::Char('h') | KeyCode::Left => self.prev_day(),
                             KeyCode::Char('l') | KeyCode::Right => self.next_day(),
+                            _ => {}
+                        },
+                        CurrentScreen::TimeTableView => match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                             _ => {}
                         },
                         CurrentScreen::FileSelect => match key.code {
@@ -241,7 +264,7 @@ impl<'a> App {
                 self.render_file_not_found(frame, rects[0]);
                 self.render_footer(frame, rects[1]);
             }
-            CurrentScreen::Main => {
+            CurrentScreen::DailyView => {
                 let vertical = &Layout::vertical([
                     Constraint::Length(4),
                     Constraint::Min(5),
@@ -254,6 +277,9 @@ impl<'a> App {
                 self.render_scrollbar(frame, rects[1]);
                 self.render_info_bar(frame, rects[2]);
                 self.render_footer(frame, rects[3]);
+            }
+            CurrentScreen::TimeTableView => {
+                self.render_timetable(frame, frame.area());
             }
             CurrentScreen::FileSelect => {
                 let widget = self.file_explorer.widget();
@@ -309,6 +335,14 @@ impl<'a> App {
                 .border_style(Style::new().fg(self.colors.footer_border_color)),
         );
         frame.render_widget(info_footer, area);
+    }
+
+    fn render_timetable(&mut self, frame: &mut Frame, area: Rect) {
+        let selected_classes = App::get_classes_by_week(&self.classes, &self.selected_date);
+        self.selected_classes = selected_classes.len();
+
+        let tt = TimeTable::from_classes(selected_classes);
+        frame.render_widget(&tt, area);
     }
 
     fn render_table(&mut self, frame: &mut Frame, area: Rect) {
@@ -410,7 +444,8 @@ impl<'a> App {
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
         let text = match self.current_screen {
-            CurrentScreen::Main => Text::from(MAIN_INFO_TEXT),
+            CurrentScreen::DailyView => Text::from(MAIN_INFO_TEXT),
+            CurrentScreen::TimeTableView => Text::from(""),
             CurrentScreen::FileNotFound => Text::from(FILE_NOT_FOUND_INFO_TEXT),
             CurrentScreen::FileSelect => Text::from_iter(FILE_SELECT_INFO_TEXT),
         };
@@ -425,7 +460,8 @@ impl<'a> App {
                 Block::bordered()
                     .border_type(BorderType::Double)
                     .border_style(Style::new().fg(match self.current_screen {
-                        CurrentScreen::Main => self.colors.footer_border_color,
+                        CurrentScreen::DailyView => self.colors.footer_border_color,
+                        CurrentScreen::TimeTableView => Color::Magenta,
                         CurrentScreen::FileSelect => Color::White,
                         CurrentScreen::FileNotFound => Color::Red,
                     })),
