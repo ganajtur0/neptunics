@@ -13,7 +13,7 @@ use ratatui::widgets::{
 use unicode_segmentation::UnicodeSegmentation;
 
 const HOUR_SEVEN_AS_QUARTERS: u8 = 28;
-const HOUR_TWENTY_AS_QUARTERS: u8 = 80;
+const HOUR_TWENTY_AS_QUARTERS: u8 = 76;
 
 pub struct TimeTableState {
     pub(crate) offset: usize,
@@ -123,7 +123,7 @@ impl StatefulWidgetRef for TimeTable<'_> {
 
     fn render_ref(&self, area: Rect, buf: &mut Buffer, _state: &mut Self::State) {
         let canvas = Canvas::default()
-            .marker(symbols::Marker::HalfBlock)
+            .marker(symbols::Marker::Braille)
             .x_bounds([0.0, 70.0])
             .y_bounds([0.0, 52.0])
             .paint(|ctx| {
@@ -147,7 +147,7 @@ impl StatefulWidgetRef for TimeTable<'_> {
                     }
                     x_coord = x_coord + 10.0;
                 }
-                let mut time_iter = NaiveTime::from_hms_opt(21, 0, 0).unwrap();
+                let mut time_iter = NaiveTime::from_hms_opt(20, 0, 0).unwrap();
                 let quarter_delta = TimeDelta::minutes(15);
                 for i in 0..=52 {
                     if time_iter.minute() == 0 {

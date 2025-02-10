@@ -220,6 +220,12 @@ impl<'a> App {
             let event = event::read()?;
             if let Event::Key(key) = event {
                 if key.kind == KeyEventKind::Press {
+                    match key.code {
+                        KeyCode::Tab => match self.current_screen {
+                            _ => {}
+                        },
+                        _ => {}
+                    }
                     match self.current_screen {
                         // let shift_pressed: bool = key.modifiers.contains(KeyModifiers::SHIFT);
                         CurrentScreen::DailyView => match key.code {
