@@ -222,14 +222,21 @@ impl<'a> App {
                 if key.kind == KeyEventKind::Press {
                     match key.code {
                         KeyCode::Tab => match self.current_screen {
+                            CurrentScreen::DailyView => {
+                                self.current_screen = CurrentScreen::TimeTableView
+                            }
+                            CurrentScreen::TimeTableView => {
+                                self.current_screen = CurrentScreen::DailyView
+                            }
                             _ => {}
                         },
+                        KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                         _ => {}
                     }
                     match self.current_screen {
                         // let shift_pressed: bool = key.modifiers.contains(KeyModifiers::SHIFT);
                         CurrentScreen::DailyView => match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                            // KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                             KeyCode::Char('j') | KeyCode::Down => self.next_row(),
                             KeyCode::Char('k') | KeyCode::Up => self.prev_row(),
                             KeyCode::Char('h') | KeyCode::Left => self.prev_day(),
@@ -237,11 +244,11 @@ impl<'a> App {
                             _ => {}
                         },
                         CurrentScreen::TimeTableView => match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                            // KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                             _ => {}
                         },
                         CurrentScreen::FileSelect => match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                            // KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                             KeyCode::Enter => {
                                 if self.file_explorer.current().is_dir() {
                                     self.file_explorer.handle(&event)?;
@@ -253,7 +260,7 @@ impl<'a> App {
                         },
                         CurrentScreen::FileNotFound => match key.code {
                             KeyCode::Enter => self.current_screen = CurrentScreen::FileSelect,
-                            KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                            // KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                             _ => {}
                         },
                     }

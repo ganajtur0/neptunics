@@ -7,7 +7,7 @@ use ratatui::prelude::{Buffer, Frame, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::symbols;
 use ratatui::widgets::{
-    canvas::{Canvas, Line, Rectangle},
+    canvas::{Canvas, Line, Painter, Rectangle},
     StatefulWidget, StatefulWidgetRef, Widget, WidgetRef,
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -139,10 +139,18 @@ impl StatefulWidgetRef for TimeTable<'_> {
                             width: 7.0,
                             color: Color::Cyan,
                         });
+                        let coords_min: (usize, usize);
+                        let coords_max: (usize, usize);
+                        {
+                            let painter = Painter::from(&mut *ctx);
+                            coords_min = painter.get_point(x_coord, y_coord).unwrap();
+                            coords_max =
+                                painter.get_point(x_coord + 7.0, y_coord + height).unwrap();
+                        }
                         ctx.print(
                             x_coord + 1.0,
                             y_coord + height - 2.0,
-                            class.name.graphemes(true).take(10).collect::<String>(),
+                            wrap_text(class.name.clone(), coords_min, coords_max),
                         );
                     }
                     x_coord = x_coord + 10.0;
@@ -158,6 +166,34 @@ impl StatefulWidgetRef for TimeTable<'_> {
             });
         canvas.render(area, buf);
     }
+}
+
+fn wrap_text(text: String, coords_min: (usize, usize), coords_max: (usize, usize)) -> String {
+    let mut graphemes = text.graphemes(true).into_iter();
+    let line_len = coords_max.0 - coords_min.0;
+    // let num_lines = coords_max.1 - coords_min.1;
+    let wrap_characters = " ,.-";
+
+    let mut wrap_index = line_len;
+
+    if !wrap_characters.contains(graphemes.nth(line_len).unwrap_or("?")) {
+        for i in 0..line_len {
+            if wrap_characters.contains(graphemes.nth(line_len).unwrap_or("?")) {
+                wrap_index = i;
+            }
+        }
+    }
+
+    let mut result = String::from(graphemes.clone().take(wrap_index).collect::<String>());
+    result.push('\n');
+    result.push_str(
+        &graphemes
+            .skip(wrap_index)
+            .take(line_len - 3)
+            .collect::<String>(),
+    );
+    result.push_str("...");
+    result
 }
 
 #[cfg(test)]
