@@ -3,11 +3,13 @@
 
 use crate::NeptunClass;
 use chrono::{Datelike, NaiveTime, TimeDelta, Timelike};
+use ratatui::layout::Alignment;
 use ratatui::prelude::{Buffer, Frame, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::symbols;
+use ratatui::text::Line;
 use ratatui::widgets::{
-    canvas::{Canvas, Line, Painter, Rectangle},
+    canvas::{Canvas, Painter, Rectangle},
     StatefulWidget, StatefulWidgetRef, Widget, WidgetRef,
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -15,16 +17,93 @@ use unicode_segmentation::UnicodeSegmentation;
 const HOUR_SEVEN_AS_QUARTERS: u8 = 28;
 const HOUR_TWENTY_AS_QUARTERS: u8 = 76;
 
+pub enum TimeTableNavigation {
+    UP,
+    DOWN,
+    LEFT,
+    RIGHT,
+}
+
 pub struct TimeTableState {
-    pub(crate) offset: usize,
-    pub(crate) selected: Option<usize>,
+    pub(crate) selected_day: usize,
+    pub(crate) selected_class: Option<usize>,
+    pub(crate) index: Option<usize>,
+    distribution: [usize; 5],
 }
 
 impl Default for TimeTableState {
     fn default() -> Self {
         Self {
-            offset: 0,
-            selected: None,
+            selected_day: 0,
+            selected_class: None,
+            distribution: [0; 5],
+            index: None,
+        }
+    }
+}
+
+impl TimeTableState {
+    pub fn navigate(&mut self, nav: TimeTableNavigation) {
+        let selected_class: usize;
+        match self.selected_class {
+            Some(n) => selected_class = n,
+            _ => {
+                self.selected_class = Some(0);
+                self.index = Some(0);
+                return;
+            }
+        }
+        match nav {
+            TimeTableNavigation::UP => {
+                if selected_class == 0 {
+                    self.selected_class = Some(
+                        self.distribution[self.selected_day]
+                            .checked_sub(1)
+                            .unwrap_or(0),
+                    );
+                } else {
+                    self.selected_class = Some(selected_class - 1);
+                }
+            }
+            TimeTableNavigation::DOWN => {
+                if selected_class
+                    == self.distribution[self.selected_day]
+                        .checked_sub(1)
+                        .unwrap_or(0)
+                {
+                    self.selected_class = Some(0);
+                } else {
+                    self.selected_class = Some(selected_class + 1);
+                }
+            }
+            TimeTableNavigation::LEFT => {
+                if self.selected_day == 0 {
+                    self.selected_day = 4;
+                } else {
+                    self.selected_day -= 1;
+                }
+                self.selected_class = Some(0);
+            }
+            TimeTableNavigation::RIGHT => {
+                if self.selected_day == 4 {
+                    self.selected_day = 0;
+                } else {
+                    self.selected_day += 1;
+                }
+                self.selected_class = Some(0);
+            }
+        }
+        self.index = Some(
+            self.distribution[..self.selected_day]
+                .into_iter()
+                .sum::<usize>()
+                + self.selected_class.unwrap_or(0),
+        );
+    }
+
+    pub fn set_distribution(&mut self, tt: &TimeTable) {
+        for i in 0..5 {
+            self.distribution[i] = tt.classes[i].len();
         }
     }
 }
@@ -121,37 +200,38 @@ impl StatefulWidget for &TimeTable<'_> {
 impl StatefulWidgetRef for TimeTable<'_> {
     type State = TimeTableState;
 
-    fn render_ref(&self, area: Rect, buf: &mut Buffer, _state: &mut Self::State) {
+    fn render_ref(&self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         let canvas = Canvas::default()
-            .marker(symbols::Marker::Braille)
+            .marker(symbols::Marker::HalfBlock)
             .x_bounds([0.0, 70.0])
             .y_bounds([0.0, 52.0])
             .paint(|ctx| {
                 let mut x_coord = 5.0;
-                for day in &self.classes {
-                    for class in day {
+                for (i, day) in self.classes.clone().into_iter().enumerate() {
+                    for (j, class) in day.into_iter().enumerate() {
                         let y_coord = f64::from(TimeTable::quarters_from_twenty(&class));
                         let height = f64::from(TimeTable::height_in_quarters(&class));
+                        let color: Color;
+                        if let Some(n) = state.selected_class {
+                            if state.selected_day == i && n == j {
+                                color = Color::White;
+                            } else {
+                                color = Color::Cyan;
+                            }
+                        } else {
+                            color = Color::Cyan;
+                        }
+
                         ctx.draw(&Rectangle {
                             x: x_coord,
                             y: y_coord,
                             height,
                             width: 7.0,
-                            color: Color::Cyan,
+                            color,
                         });
-                        let coords_min: (usize, usize);
-                        let coords_max: (usize, usize);
-                        {
-                            let painter = Painter::from(&mut *ctx);
-                            coords_min = painter.get_point(x_coord, y_coord).unwrap();
-                            coords_max =
-                                painter.get_point(x_coord + 7.0, y_coord + height).unwrap();
-                        }
-                        ctx.print(
-                            x_coord + 1.0,
-                            y_coord + height - 2.0,
-                            wrap_text(class.name.clone(), coords_min, coords_max),
-                        );
+                        let mut text = class.name.graphemes(true).take(10).collect::<String>();
+                        text.push_str("...");
+                        ctx.print(x_coord + 1.0, y_coord + (height / 2.0), text);
                     }
                     x_coord = x_coord + 10.0;
                 }
@@ -166,34 +246,6 @@ impl StatefulWidgetRef for TimeTable<'_> {
             });
         canvas.render(area, buf);
     }
-}
-
-fn wrap_text(text: String, coords_min: (usize, usize), coords_max: (usize, usize)) -> String {
-    let mut graphemes = text.graphemes(true).into_iter();
-    let line_len = coords_max.0 - coords_min.0;
-    // let num_lines = coords_max.1 - coords_min.1;
-    let wrap_characters = " ,.-";
-
-    let mut wrap_index = line_len;
-
-    if !wrap_characters.contains(graphemes.nth(line_len).unwrap_or("?")) {
-        for i in 0..line_len {
-            if wrap_characters.contains(graphemes.nth(line_len).unwrap_or("?")) {
-                wrap_index = i;
-            }
-        }
-    }
-
-    let mut result = String::from(graphemes.clone().take(wrap_index).collect::<String>());
-    result.push('\n');
-    result.push_str(
-        &graphemes
-            .skip(wrap_index)
-            .take(line_len - 3)
-            .collect::<String>(),
-    );
-    result.push_str("...");
-    result
 }
 
 #[cfg(test)]

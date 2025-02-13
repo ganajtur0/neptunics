@@ -11,12 +11,12 @@ use ratatui::{
     text::Text,
     widgets::{
         Block, BorderType, Cell, HighlightSpacing, Paragraph, Row, Scrollbar, ScrollbarOrientation,
-        ScrollbarState, Table, TableState,
+        ScrollbarState, Table, TableState, Wrap,
     },
     DefaultTerminal, Frame,
 };
 use std::io::Result;
-use timetable::TimeTable;
+use timetable::{TimeTable, TimeTableNavigation, TimeTableState};
 
 use icalendar::{Calendar, CalendarComponent, Component, DatePerhapsTime, EventLike};
 use std::fs::read_to_string;
@@ -47,7 +47,8 @@ enum CurrentScreen {
 }
 
 struct App {
-    state: TableState,
+    tablestate: TableState,
+    timetablestate: TimeTableState,
     classes: Vec<NeptunClass>,
     selected_classes: usize,
     longest_items_lens: (u16, u16, u16, u16, u16), // name, code, duration, location, teachers
@@ -74,7 +75,8 @@ impl<'a> App {
         let file_explorer_theme = ratatui_explorer::Theme::default().add_default_title();
         if success {
             Self {
-                state: TableState::default().with_selected(0),
+                tablestate: TableState::default().with_selected(0),
+                timetablestate: TimeTableState::default(),
                 classes: classes.clone(),
                 longest_items_lens: LONGEST_ITEMS_LENS,
                 scroll_state: ScrollbarState::new(0),
@@ -86,7 +88,8 @@ impl<'a> App {
             }
         } else {
             Self {
-                state: TableState::default().with_selected(0),
+                tablestate: TableState::default().with_selected(0),
+                timetablestate: TimeTableState::default(),
                 classes: classes.clone(),
                 longest_items_lens: (25, 20, 13, 17, 25),
                 scroll_state: ScrollbarState::new(0),
@@ -166,7 +169,7 @@ impl<'a> App {
     }
 
     pub fn next_row(&mut self) {
-        let i = match self.state.selected() {
+        let i = match self.tablestate.selected() {
             Some(i) => {
                 if i >= self.selected_classes - 1 {
                     0
@@ -176,12 +179,12 @@ impl<'a> App {
             }
             _ => 0,
         };
-        self.state.select(Some(i));
+        self.tablestate.select(Some(i));
         self.scroll_state = self.scroll_state.position(i * ITEM_HEIGHT);
     }
 
     pub fn prev_row(&mut self) {
-        let i = match self.state.selected() {
+        let i = match self.tablestate.selected() {
             Some(i) => {
                 if i == 0 {
                     self.selected_classes - 1
@@ -191,7 +194,7 @@ impl<'a> App {
             }
             _ => 0,
         };
-        self.state.select(Some(i));
+        self.tablestate.select(Some(i));
         self.scroll_state = self.scroll_state.position(i * ITEM_HEIGHT);
     }
 
@@ -245,6 +248,18 @@ impl<'a> App {
                         },
                         CurrentScreen::TimeTableView => match key.code {
                             // KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                self.timetablestate.navigate(TimeTableNavigation::DOWN)
+                            }
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                self.timetablestate.navigate(TimeTableNavigation::UP)
+                            }
+                            KeyCode::Char('h') | KeyCode::Left => {
+                                self.timetablestate.navigate(TimeTableNavigation::LEFT)
+                            }
+                            KeyCode::Char('l') | KeyCode::Right => {
+                                self.timetablestate.navigate(TimeTableNavigation::RIGHT)
+                            }
                             _ => {}
                         },
                         CurrentScreen::FileSelect => match key.code {
@@ -292,7 +307,11 @@ impl<'a> App {
                 self.render_footer(frame, rects[3]);
             }
             CurrentScreen::TimeTableView => {
-                self.render_timetable(frame, frame.area());
+                let vertical =
+                    &Layout::vertical([Constraint::Percentage(80), Constraint::Percentage(20)]);
+                let rects = vertical.split(frame.area());
+                self.render_timetable(frame, rects[0]);
+                self.render_info_col(frame, rects[1]);
             }
             CurrentScreen::FileSelect => {
                 let widget = self.file_explorer.widget();
@@ -355,7 +374,8 @@ impl<'a> App {
         self.selected_classes = selected_classes.len();
 
         let tt = TimeTable::from_classes(selected_classes);
-        frame.render_widget(&tt, area);
+        self.timetablestate.set_distribution(&tt);
+        frame.render_stateful_widget(&tt, area, &mut self.timetablestate);
     }
 
     fn render_table(&mut self, frame: &mut Frame, area: Rect) {
@@ -413,7 +433,7 @@ impl<'a> App {
         .highlight_symbol(Text::from(vec!["".into(), "⮞".into(), "".into()]))
         .bg(self.colors.buffer_bg)
         .highlight_spacing(HighlightSpacing::Always);
-        frame.render_stateful_widget(t, area, &mut self.state);
+        frame.render_stateful_widget(t, area, &mut self.tablestate);
     }
 
     fn render_scrollbar(&mut self, frame: &mut Frame, area: Rect) {
@@ -432,7 +452,7 @@ impl<'a> App {
 
     fn render_info_bar(&self, frame: &mut Frame, area: Rect) {
         let selected_classes = App::get_classes_by_day(&self.classes, &self.selected_date);
-        let info = match self.state.selected() {
+        let info = match self.tablestate.selected() {
             Some(i) => {
                 let str_arr = selected_classes[i].string_array();
                 [str_arr[0].clone(), str_arr[4].clone()]
@@ -452,6 +472,29 @@ impl<'a> App {
                     .border_type(BorderType::Rounded)
                     .border_style(Style::new().fg(self.colors.footer_border_color)),
             );
+        frame.render_widget(info_bar, area);
+    }
+
+    fn render_info_col(&self, frame: &mut Frame, area: Rect) {
+        let selected_classes = App::get_classes_by_week(&self.classes, &self.selected_date);
+        let info = match self.timetablestate.index {
+            Some(i) => selected_classes[i].string_array(),
+            _ => ["Név", "Kód", "Időtartam", "Tanárok", "Helyszín"].map(|x| x.to_owned()),
+        };
+
+        let info_bar = Paragraph::new(Text::from_iter(info))
+            .style(
+                Style::new()
+                    .fg(self.colors.row_fg)
+                    .bg(self.colors.buffer_bg),
+            )
+            .centered()
+            .block(
+                Block::bordered()
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::new().fg(self.colors.footer_border_color)),
+            )
+            .wrap(Wrap { trim: true });
         frame.render_widget(info_bar, area);
     }
 

@@ -90,8 +90,8 @@ impl NeptunClass {
             self.code.to_owned(),
             format!(
                 "{} - {}",
-                self.start.time().format("%H:%M"),
-                self.end.time().format("%H:%M")
+                self.start.naive_local().time().format("%H:%M"),
+                self.end.naive_local().time().format("%H:%M")
             ),
             self.location.to_owned(),
             self.teachers.join(";"),
